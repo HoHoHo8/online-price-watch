@@ -8,39 +8,47 @@ st.set_page_config(page_title="超級市場貨品價格追蹤 Dashboard", layout
 st.title("🛒 香港網上超市價格追蹤 & 趨勢分析")
 
 # 讀取歷史資料
-@st.cache_data(ttl=3600)
+@st.cache_data(ttl=1800)
 def load_data():
     df = pd.read_csv('data/prices_history.csv')
     df['date'] = pd.to_datetime(df['date'])
+    # 確保 category 欄位存在
+    if 'category' not in df.columns:
+        df['category'] = '未分類'
     return df
 
 try:
     df = load_data()
 except Exception as e:
-    st.error("未搵到歷史數據，請確認 data/prices_history.csv 是否存在！")
+    st.error("未搵到歷史數據，請先運行 Actions 或檢查 data/prices_history.csv！")
     st.stop()
 
-# 側邊欄：篩選器
+# 側邊欄：多級篩選器
 st.sidebar.header("🔍 篩選條件")
 
-# 取得所有可用品牌
-all_brands = sorted(df['brand'].dropna().unique().tolist())
-selected_brands = st.sidebar.multiselect("選擇品牌", options=all_brands, default=all_brands)
+# 1. 類別篩選
+categories = sorted(df['category'].dropna().unique().tolist())
+selected_cat = st.sidebar.selectbox("1. 選擇貨品類別", options=["全部類別"] + categories)
 
-# 根據選擇的品牌過濾數據
-selected_df = df[df['brand'].isin(selected_brands)] if selected_brands else df
+df_filtered = df if selected_cat == "全部類別" else df[df['category'] == selected_cat]
 
-# 檢查過濾後是否有貨品
-all_items = sorted(selected_df['item_name'].dropna().unique().tolist()) if not selected_df.empty else []
+# 2. 品牌篩選
+brands = sorted(df_filtered['brand'].dropna().unique().tolist())
+selected_brands = st.sidebar.multiselect("2. 選擇品牌 (可多選)", options=brands, default=brands)
 
-if not all_items:
-    st.warning("⚠️ 找不到符合條件的貨品，請重新選擇品牌！")
+df_filtered = df_filtered[df_filtered['brand'].isin(selected_brands)] if selected_brands else df_filtered
+
+# 3. 貨品搜尋/選擇
+items = sorted(df_filtered['item_name'].dropna().unique().tolist())
+
+if not items:
+    st.warning("⚠️ 找不到符合條件的貨品，請調整篩選條件！")
     st.stop()
 
-selected_item = st.sidebar.selectbox("選擇貨品", options=all_items)
-item_df = selected_df[selected_df['item_name'] == selected_item]
+selected_item = st.sidebar.selectbox("3. 選擇貨品", options=items)
+item_df = df_filtered[df_filtered['item_name'] == selected_item]
 
-# 核心功能：計算 DoD, WoW, MoM, YoY 價格變動
+# 核心功能：計算 DoD, WoW, MoM, YoY
 def calculate_metrics(data):
     if data.empty:
         return pd.DataFrame()
@@ -83,7 +91,7 @@ if not item_df.empty and pd.notna(item_df['date'].max()):
     metrics_df = calculate_metrics(item_df)
     st.dataframe(metrics_df, use_container_width=True)
 
-    # 2. 顯示價格走勢圖 (Plotly 折線圖)
+    # 折線圖
     st.subheader("📈 歷史價格走勢圖")
     fig = px.line(
         item_df, 
@@ -96,5 +104,3 @@ if not item_df.empty and pd.notna(item_df['date'].max()):
     )
     fig.update_layout(hovermode="x unified")
     st.plotly_chart(fig, use_container_width=True)
-else:
-    st.info("該貨品暫無歷史價格紀錄。")
