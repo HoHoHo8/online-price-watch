@@ -11,7 +11,9 @@ st.title("🛒 香港網上超市價格追蹤 & 趨勢分析")
 @st.cache_data(ttl=10)
 def load_data():
     df = pd.read_csv('data/prices_history.csv')
-    df['date'] = pd.to_datetime(df['date'])
+    
+    # 關鍵修正：加入 format='mixed'，自動解析混合格式（如 3/8/2026 與 2026-08-04）
+    df['date'] = pd.to_datetime(df['date'], format='mixed', dayfirst=False)
     
     # 相容性處理：如果 category 為空，使用 cat1
     if 'category' not in df.columns or df['category'].isnull().all():
