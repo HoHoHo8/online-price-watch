@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 from datetime import datetime
 
-# 1. 確保 data 資料夾存在 (關鍵防呆！)
+# 確保 data 資料夾存在
 os.makedirs('data', exist_ok=True)
 
 url = 'https://online-price-watch.consumer.org.hk/opw/opendata/pricewatch.json'
@@ -29,25 +29,29 @@ for item in data:
     brand = item.get('brand', '')
     item_name = item.get('name', '')
     
-    for shop_code, price_info in item.get('prices', {}).items():
-        price = price_info.get('price')
-        shop_name = price_info.get('shop_name', shop_code)
-        
-        if price is not None:
-            rows.append({
-                'date': today_str,
-                'cat1': cat1,
-                'category': cat2,
-                'item_id': item_id,
-                'brand': brand,
-                'item_name': item_name,
-                'supermarket': shop_name,
-                'price': price
-            })
+    # 修正重點：prices 是列表 (List)，遍歷每個超市字典
+    prices_list = item.get('prices', [])
+    if isinstance(prices_list, list):
+        for price_info in prices_list:
+            if isinstance(price_info, dict):
+                price = price_info.get('price')
+                shop_name = price_info.get('shop_name', price_info.get('shop', ''))
+                
+                if price is not None:
+                    rows.append({
+                        'date': today_str,
+                        'cat1': cat1,
+                        'category': cat2,
+                        'item_id': item_id,
+                        'brand': brand,
+                        'item_name': item_name,
+                        'supermarket': shop_name,
+                        'price': price
+                    })
 
 df_today = pd.DataFrame(rows)
 
-# 追加寫入 CSV
+# 追加寫入當月專屬 CSV
 if os.path.exists(monthly_file_path):
     df_old = pd.read_csv(monthly_file_path)
     df_combined = pd.concat([df_old, df_today], ignore_index=True)
