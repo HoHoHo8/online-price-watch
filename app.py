@@ -1,18 +1,67 @@
+import glob
+import os
 import streamlit as st
 import pandas as pd
 import plotly.express as px
 from datetime import datetime, timedelta
 
-st.set_page_config(page_title="超級市場貨品價格追蹤 Dashboard", layout="wide")
+# 1. 頁面設定
+st.set_page_config(page_title="香港網上超市價格追蹤系統", layout="wide")
+
+# ---------------------------------------------------------
+# 🔒 密碼登入機制設定
+# ---------------------------------------------------------
+# 💡 請在下方修改為你自訂的登入密碼
+APP_PASSWORD = "your_secret_password"  # <--- 請修改這裡的密碼！
+
+# 初始化登入狀態
+if "authenticated" not in st.session_state:
+    st.session_state.authenticated = False
+
+# 登入頁面 UI
+def login_page():
+    st.title("🔒 超市價格追蹤系統 - 身份驗證")
+    st.markdown("本系統僅供內部/個人研究使用，請輸入存取密碼。")
+    
+    password_input = st.text_input("請輸入密碼", type="password")
+    if st.button("登入"):
+        if password_input == APP_PASSWORD:
+            st.session_state.authenticated = True
+            st.success("密碼正確！正在進入系統...")
+            st.rerun()
+        else:
+            st.error("❌ 密碼不正確，請重新輸入。")
+
+# 若未通過驗證，停止載入後續 UI
+if not st.session_state.authenticated:
+    login_page()
+    st.stop()
+
+# ---------------------------------------------------------
+# 🔓 通過驗證後的 Dashboard 主體
+# ---------------------------------------------------------
+
+# 側邊欄：登出按鈕
+st.sidebar.title("👤 使用者權限")
+if st.sidebar.button("🚪 安全登出"):
+    st.session_state.authenticated = False
+    st.rerun()
+
+st.sidebar.markdown("---")
 
 st.title("🛒 香港網上超市價格追蹤 & 趨勢分析")
 
-# 讀取歷史資料 (強迫關閉長時間快取，並支援混合日期格式)
+# 讀取歷史資料 (自動讀取 data/*.csv)
 @st.cache_data(ttl=10)
 def load_data():
-    df = pd.read_csv('data/prices_history.csv')
+    csv_files = glob.glob('data/*.csv')
+    if not csv_files:
+        raise FileNotFoundError("未在 data/ 資料夾中找到任何 CSV 數據檔案！")
+        
+    df_list = [pd.read_csv(f) for f in csv_files]
+    df = pd.concat(df_list, ignore_index=True)
     
-    # 相容性日期解析 (處理 3/8/2026 與 2026-08-04 混合格式)
+    # 支援混合日期格式
     df['date'] = pd.to_datetime(df['date'], format='mixed', dayfirst=False)
     
     # 欄位空值補全
@@ -32,12 +81,11 @@ def load_data():
 try:
     df = load_data()
 except Exception as e:
-    st.error(f"未搵到歷史數據或格式有誤，請檢查 data/prices_history.csv！錯誤訊息: {e}")
+    st.error(f"未搵到歷史數據或格式有誤，請檢查 data/ 資料夾！錯誤訊息: {e}")
     st.stop()
 
 # 側邊欄：分頁選單
 page = st.sidebar.radio("📌 請選擇分析功能", ["單一貨品深度追蹤", "同類別貨品價格比較 (Cat1 / Category)"])
-
 st.sidebar.markdown("---")
 
 # ==========================================
@@ -68,7 +116,7 @@ if page == "單一貨品深度追蹤":
     selected_item = st.sidebar.selectbox("3. 選擇貨品", options=items)
     item_df = df_filtered[df_filtered['item_name'] == selected_item]
 
-    # DoD, WoW, MoM, YoY 計算函數
+    # 計算變動指標
     def calculate_metrics(data):
         if data.empty:
             return pd.DataFrame()
@@ -119,46 +167,57 @@ if page == "單一貨品深度追蹤":
 
 
 # ==========================================
-# 頁面 2：同類別貨品價格比較 (Cat1 / Category)
+# 頁面 2：同類別貨品價格比較 (Cat1 / Category / Brand)
 # ==========================================
 elif page == "同類別貨品價格比較 (Cat1 / Category)":
     st.sidebar.header("📊 類別比較條件")
 
-    # 選擇主類別 cat1
+    # 1. 選擇主類別 cat1
     cat1_list = sorted(df['cat1'].dropna().unique().tolist())
     selected_cat1 = st.sidebar.selectbox("1. 選擇主類別 (Cat1)", options=cat1_list)
 
-    # 根據 Cat1 篩選子類別 Category
+    # 2. 根據 Cat1 篩選子類別 Category
     df_cat1 = df[df['cat1'] == selected_cat1]
     category_list = sorted(df_cat1['category'].dropna().unique().tolist())
     selected_category = st.sidebar.selectbox("2. 選擇子類別 (Category)", options=["全部子類別"] + category_list)
 
-    # 最終類別數據集
+    # 套用 Category 篩選
     if selected_category == "全部子類別":
-        cat_df = df_cat1
-        title_tag = f"{selected_cat1}"
+        df_cat = df_cat1
+        cat_tag = f"{selected_cat1}"
     else:
-        cat_df = df_cat1[df_cat1['category'] == selected_category]
-        title_tag = f"{selected_cat1} ➔ {selected_category}"
+        df_cat = df_cat1[df_cat1['category'] == selected_category]
+        cat_tag = f"{selected_cat1} ➔ {selected_category}"
+
+    # 3. 新增功能：根據 Cat1/Category 連動篩選 Brand
+    brand_list = sorted(df_cat['brand'].dropna().unique().tolist())
+    selected_brands = st.sidebar.multiselect("3. 選擇品牌 (可多選，留空為全部)", options=brand_list, default=[])
+
+    # 最終類別數據集
+    if selected_brands:
+        cat_df = df_cat[df_cat['brand'].isin(selected_brands)]
+        title_tag = f"{cat_tag} (指定品牌)"
+    else:
+        cat_df = df_cat
+        title_tag = cat_tag
 
     st.subheader(f"🏷️ 品類數據總覽：【{title_tag}】")
 
     if cat_df.empty:
-        st.warning("該類別下暫無數據！")
+        st.warning("⚠️ 該篩選條件下暫無數據，請調整品牌或類別！")
         st.stop()
 
     # 1. 關鍵指標卡片 (KPI Summary)
     latest_date = cat_df['date'].max()
     latest_cat_df = cat_df[cat_df['date'] == latest_date]
 
-    # 計算 52 周最高/最低 (以過去 365 天為限)
+    # 計算 52 周最高/最低
     one_year_ago = latest_date - timedelta(days=365)
     df_52w = cat_df[cat_df['date'] >= one_year_ago]
 
     max_52w = df_52w['price'].max()
     min_52w = df_52w['price'].min()
 
-    # 現時最貴與最便宜貨品
     most_expensive_item = latest_cat_df.loc[latest_cat_df['price'].idxmax()] if not latest_cat_df.empty else None
     cheapest_item = latest_cat_df.loc[latest_cat_df['price'].idxmin()] if not latest_cat_df.empty else None
 
@@ -178,25 +237,20 @@ elif page == "同類別貨品價格比較 (Cat1 / Category)":
 
     st.markdown("---")
 
-    # 2. 類別內所有貨品的最新價格排行表
+    # 2. 最新價格排行榜
     st.subheader("📋 同類別貨品現時價格排行榜 (最便宜 ➡️ 最貴)")
-    
-    # 整理各貨品在最新日期的最低價與各超市價位
     summary_table = latest_cat_df.groupby(['item_name', 'brand', 'supermarket'])['price'].min().reset_index()
     summary_table = summary_table.sort_values(by='price', ascending=True)
     summary_table.columns = ['貨品名稱', '品牌', '超市', '最新價格 (HKD)']
     st.dataframe(summary_table, use_container_width=True)
 
-    # 3. 類別內熱門貨品歷史走勢折線圖比較
-    st.subheader("📈 同類別熱門貨品歷史價格走勢比較")
-    
-    # 讓使用者多選想要在圖表上比較的貨品（預設前 5 個）
+    # 3. 歷史走勢折線圖比較
+    st.subheader("📈 同類別貨品歷史價格走勢比較")
     top_items = cat_df['item_name'].unique().tolist()[:5]
     selected_compare_items = st.multiselect("選擇要加入折線圖比較的貨品 (可多選):", options=cat_df['item_name'].unique().tolist(), default=top_items)
 
     if selected_compare_items:
         compare_df = cat_df[cat_df['item_name'].isin(selected_compare_items)]
-        
         fig_cat = px.line(
             compare_df, 
             x='date', 
