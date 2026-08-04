@@ -33,6 +33,6 @@ jobs:
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git add data/prices_history.csv
-          git commit -m "Auto-update price data [$(date +'%Y-%m-%d')]" || echo "No changes to commit"
+          git add data/*.csv
+          git commit -m "Auto-update monthly price data [$(date +'%Y-%m-%d')]" || echo "No changes to commit"
           git push
