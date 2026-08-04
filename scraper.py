@@ -3,8 +3,12 @@ import requests
 import pandas as pd
 from datetime import datetime
 
-# 消委會官方「全量中文 Open Data」JSON 接口
-FULL_DATA_URL = "https://online-price-watch.consumer.org.hk/opw/opendata/pricewatch_tc.json"
+# 消委會全量開放數據 API 備用網址清單
+DATA_URLS = [
+    "https://online-price-watch.consumer.org.hk/opw/opendata/pricewatch-tc.json",  # 官方最新全量 JSON (連字號)
+    "https://online-price-watch.consumer.org.hk/opw/opendata/pricewatch_tc.json",  # 備用底線網址
+    "https://online-price-watch.consumer.org.hk/opw/opendata/pricewatch_en.json"   # 備用英文全量 JSON
+]
 
 def fetch_all_data():
     headers = {
@@ -12,15 +16,27 @@ def fetch_all_data():
         'Accept': 'application/json'
     }
     
-    print("⏳ 正在從消委會下載全量超市價格數據...")
-    response = requests.get(FULL_DATA_URL, headers=headers, timeout=60)
-    response.raise_for_status()
-    data = response.json()
+    data = None
+    # 遍歷網址，直到成功取得 JSON 資料
+    for url in DATA_URLS:
+        try:
+            print(f"⏳ 嘗試從消委會下載數據: {url}")
+            response = requests.get(url, headers=headers, timeout=30)
+            if response.status_code == 200:
+                data = response.json()
+                print("✅ 成功連線並取得消委會全量數據！")
+                break
+        except Exception as e:
+            print(f"⚠️ 連線 {url} 失敗: {e}")
+            continue
+
+    if not data:
+        raise Exception("❌ 所有消委會 API 接口均連線失敗，請檢查網路或 API 是否改版。")
 
     today = datetime.now().strftime('%Y-%m-%d')
     records = []
     
-    # 遍歷消委會所有貨品
+    # 解析消委會全量貨品 JSON
     if isinstance(data, list):
         for item in data:
             code = item.get('code', '')
@@ -48,14 +64,14 @@ def fetch_all_data():
                             continue
 
     df_new = pd.DataFrame(records)
-    print(f"✅ 成功抓取今日 ({today}) 全港消委會共 {len(df_new)} 條價格數據！")
+    print(f"🎉 今日 ({today}) 成功解析全港消委會共 {len(df_new)} 條超市價格數據！")
     return df_new
 
 def update_history():
     df_new = fetch_all_data()
     
     if df_new.empty:
-        raise Exception("❌ 未能取得任何數據！")
+        raise Exception("❌ 解析出來的數據庫為空，取消更新。")
 
     file_path = 'data/prices_history.csv'
     os.makedirs('data', exist_ok=True)
@@ -68,7 +84,7 @@ def update_history():
         df_combined = df_new
         
     df_combined.to_csv(file_path, index=False, encoding='utf-8-sig')
-    print(f"🎉 歷史數據檔案更新成功！累積紀錄達 {len(df_combined)} 條。")
+    print(f"🚀 CSV 檔案更新完成！累積歷史數據已達 {len(df_combined)} 條。")
 
 if __name__ == '__main__':
     update_history()
