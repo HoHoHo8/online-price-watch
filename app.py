@@ -7,20 +7,26 @@ st.set_page_config(page_title="超級市場貨品價格追蹤 Dashboard", layout
 
 st.title("🛒 香港網上超市價格追蹤 & 趨勢分析")
 
-# 讀取歷史資料
-@st.cache_data(ttl=1800)
+# 讀取歷史資料 (強迫關閉長時間快取，確保即時讀取最新 CSV)
+@st.cache_data(ttl=10)
 def load_data():
     df = pd.read_csv('data/prices_history.csv')
     df['date'] = pd.to_datetime(df['date'])
-    # 確保 category 欄位存在
-    if 'category' not in df.columns:
-        df['category'] = '未分類'
+    
+    # 相容性處理：如果 category 為空，使用 cat1
+    if 'category' not in df.columns or df['category'].isnull().all():
+        df['category'] = df['cat1']
+        
+    # 清理字串欄位空值
+    df['brand'] = df['brand'].fillna('其他品牌')
+    df['category'] = df['category'].fillna('一般食品')
+    df['item_name'] = df['item_name'].fillna('未命名貨品')
     return df
 
 try:
     df = load_data()
 except Exception as e:
-    st.error("未搵到歷史數據，請先運行 Actions 或檢查 data/prices_history.csv！")
+    st.error("未搵到歷史數據，請檢查 data/prices_history.csv！")
     st.stop()
 
 # 側邊欄：多級篩選器
@@ -32,7 +38,7 @@ selected_cat = st.sidebar.selectbox("1. 選擇貨品類別", options=["全部類
 
 df_filtered = df if selected_cat == "全部類別" else df[df['category'] == selected_cat]
 
-# 2. 品牌篩選
+# 2. 品牌篩選 (預設全選，方便搜尋)
 brands = sorted(df_filtered['brand'].dropna().unique().tolist())
 selected_brands = st.sidebar.multiselect("2. 選擇品牌 (可多選)", options=brands, default=brands)
 
@@ -42,7 +48,7 @@ df_filtered = df_filtered[df_filtered['brand'].isin(selected_brands)] if selecte
 items = sorted(df_filtered['item_name'].dropna().unique().tolist())
 
 if not items:
-    st.warning("⚠️ 找不到符合條件的貨品，請調整篩選條件！")
+    st.warning("⚠️ 找不到符合條件的貨品，請重新勾選品牌或類別！")
     st.stop()
 
 selected_item = st.sidebar.selectbox("3. 選擇貨品", options=items)
@@ -91,7 +97,7 @@ if not item_df.empty and pd.notna(item_df['date'].max()):
     metrics_df = calculate_metrics(item_df)
     st.dataframe(metrics_df, use_container_width=True)
 
-    # 折線圖
+    # 折線走勢圖
     st.subheader("📈 歷史價格走勢圖")
     fig = px.line(
         item_df, 
