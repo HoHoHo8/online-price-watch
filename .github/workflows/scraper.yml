@@ -2,12 +2,11 @@ name: Daily Price Scraper
 
 on:
   schedule:
-    # 0 4 * * * 表示 UTC 時間 04:00，即香港時間 (HKT) 每日中午 12:00
-    - cron: '0 4 * * *'
-  workflow_dispatch: # 依然保留手動觸發按鈕，方便隨時測試
+    - cron: '0 4 * * *' # 香港時間每日 12:00
+  workflow_dispatch:
 
 permissions:
-  contents: write # 確保 actions[bot] 有權限寫入 CSV 檔案
+  contents: write
 
 jobs:
   scrape:
@@ -33,6 +32,6 @@ jobs:
         run: |
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
-          git add data/*.csv
-          git commit -m "Auto-update monthly price data [$(date +'%Y-%m-%d')]" || echo "No changes to commit"
+          git add data/ || true
+          git commit -m "Auto-update price data [$(date +'%Y-%m-%d')]" || echo "No changes to commit"
           git push
