@@ -3,7 +3,7 @@ import requests
 import pandas as pd
 from datetime import datetime
 
-# 消委會官方「全量中文 Open Data」JSON 接口 (包含所有食品、用品、超市價格)
+# 消委會官方「全量中文 Open Data」JSON 接口
 FULL_DATA_URL = "https://online-price-watch.consumer.org.hk/opw/opendata/pricewatch_tc.json"
 
 def fetch_all_data():
@@ -13,13 +13,9 @@ def fetch_all_data():
     }
     
     print("⏳ 正在從消委會下載全量超市價格數據...")
-    try:
-        response = requests.get(FULL_DATA_URL, headers=headers, timeout=60)
-        response.raise_for_status()
-        data = response.json()
-    except Exception as e:
-        print(f"❌ 下載消委會數據失敗: {e}")
-        return pd.DataFrame()
+    response = requests.get(FULL_DATA_URL, headers=headers, timeout=60)
+    response.raise_for_status()
+    data = response.json()
 
     today = datetime.now().strftime('%Y-%m-%d')
     records = []
@@ -28,11 +24,11 @@ def fetch_all_data():
     if isinstance(data, list):
         for item in data:
             code = item.get('code', '')
-            cat1 = item.get('cat1_name', '')  # 大類別 (例如: 米/麵包/罐頭)
-            cat2 = item.get('cat2_name', '')  # 中類別 (例如: 米)
-            brand = item.get('brand', '')     # 品牌
-            name = item.get('name', '')       # 貨品名稱
-            prices = item.get('prices', {})   # 各超市價格
+            cat1 = item.get('cat1_name', '一般食品')  # 大類別
+            cat2 = item.get('cat2_name', '其他')      # 中類別
+            brand = item.get('brand', '')            # 品牌
+            name = item.get('name', '')              # 貨品名稱
+            prices = item.get('prices', {})          # 各超市價格
 
             if isinstance(prices, dict):
                 for shop, price in prices.items():
@@ -59,15 +55,13 @@ def update_history():
     df_new = fetch_all_data()
     
     if df_new.empty:
-        print("⚠️ 未能取得新數據，取消更新。")
-        return
+        raise Exception("❌ 未能取得任何數據！")
 
     file_path = 'data/prices_history.csv'
     os.makedirs('data', exist_ok=True)
     
     if os.path.exists(file_path):
         df_old = pd.read_csv(file_path)
-        # 舊資料可能沒有 category 欄位，自動對齊
         df_combined = pd.concat([df_old, df_new], ignore_index=True)
         df_combined = df_combined.drop_duplicates(subset=['date', 'item_id', 'supermarket'])
     else:
