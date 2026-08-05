@@ -1,179 +1,145 @@
 import os
 import requests
 import pandas as pd
-import json
 from datetime import datetime, timezone, timedelta
 
 # 確保 data 資料夾存在
 os.makedirs('data', exist_ok=True)
 
-url = 'https://online-price-watch.consumer.org.hk/opw/opendata/pricewatch.json'
-
-print("⏳ 正在從消委會下載最新價格數據...")
-
-# 設定偽裝 Headers 避開 403 阻擋
-headers = {
-    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-    'Accept': 'application/json, text/plain, */*',
-    'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
-    'Referer': 'https://online-price-watch.consumer.org.hk/',
-    'Origin': 'https://online-price-watch.consumer.org.hk'
-}
-
-try:
-    session = requests.Session()
-    response = session.get(url, headers=headers, timeout=30)
-    response.raise_for_status()
-    data = response.json()
-    print("✅ 數據下載成功！")
-except Exception as e:
-    print(f"❌ 下載數據失敗: {e}")
-    exit(1)
-
-# 印出第 1 筆數據結構，供 GitHub Actions Log 查驗真實欄位名稱
-if data and len(data) > 0:
-    print("\n🔍 --- [DEBUG Log] 第一筆商品數據結構預覽 ---")
-    print(json.dumps(data[0], ensure_ascii=False, indent=2)[:1200])
-    print("-----------------------------------------\n")
-
-# 香港常見超市代碼對照表 (當 API 僅傳回代碼時自動轉換)
-SHOP_MAP = {
-    'WELLCOME': '惠康',
-    'PARKNSHOP': '百佳',
-    'MARKETPLACE': 'Market Place',
-    'AEON': 'AEON',
-    'TASTE': 'TASTE',
-    'FUSION': 'FUSION',
-    'DONKI': 'DON DON DONKI',
-    'DONGURI': 'DON DON DONKI',
-    'MANNINGS': '萬寧',
-    'WATSONS': '屈臣氏',
-    'HKTVMALL': 'HKTVmall',
-    'DAISO': 'Daiso',
-    'DCH': '大昌食品'
-}
-
-# 強制使用香港時間 (UTC+8)
+# 香港時間設定 (UTC+8)
 hkt_timezone = timezone(timedelta(hours=8))
 now_hkt = datetime.now(hkt_timezone)
-
 today_str = now_hkt.strftime('%Y-%m-%d')
 month_str = now_hkt.strftime('%Y_%m')
 monthly_file_path = f'data/prices_{month_str}.csv'
 
 print(f"📅 當前香港日期: {today_str}")
 
-# 萬能文字提取函式
-def extract_text(obj):
-    if not obj:
-        return ''
-    if isinstance(obj, str):
-        return obj.strip()
-    if isinstance(obj, (int, float)):
-        return str(obj)
-    if isinstance(obj, dict):
-        # 1. 優先取中文/英文語言 Key
-        for lang in ['zh-Hant', 'zh_Hant', 'zh-HK', 'zh_HK', 'zh-Hans', 'zh', 'en', 'name_zh', 'title_zh']:
-            if lang in obj:
-                res = extract_text(obj[lang])
-                if res:
-                    return res
-        # 2. 尋找 name / title / label 鍵
-        for sub_key in ['name', 'title', 'label', 'text', 'value', 'zh_name']:
-            if sub_key in obj:
-                res = extract_text(obj[sub_key])
-                if res:
-                    return res
-        # 3. 遍歷非 code/id 欄位
-        for k, v in obj.items():
-            if k.lower() not in ['code', 'id', 'key', 'shop_code']:
-                res = extract_text(v)
-                if res:
-                    return res
-    if isinstance(obj, list):
-        for elem in obj:
-            res = extract_text(elem)
-            if res:
-                return res
-    return ''
+# 1. 萬能欄位別名對照表 (Alias Map) - 包含所有可能出現的 Header
+HEADER_ALIASES = {
+    'cat1': ['cat1', '貨品分類1', '貨品分類 1', 'cat1_name', 'category1', 'main_category'],
+    'category': ['category', 'cat2', '貨品分類2', '貨品分類 2', 'cat2_name', 'sub_category', '貨品分類3'],
+    'item_id': ['item_id', '貨品編號', 'code', 'id', 'item_code'],
+    'brand': ['brand', '品牌', 'brand_name', 'brand_zh'],
+    'item_name': ['item_name', '貨品名稱', 'name', 'title', 'name_zh'],
+    'supermarket': ['supermarket', '超市代碼', '超市名稱', 'shop', 'shop_name', 'store'],
+    'price': ['price', '價格', '價錢', 'retail_price']
+}
 
-def get_smart_field(item, keys):
-    for key in keys:
-        if key in item and item[key] is not None:
-            val = extract_text(item[key])
-            if val:
-                return val
-    return ''
+# 2. 超市名稱映射表
+SHOP_MAP = {
+    'WELLCOME': '惠康',
+    'PARKNSHOP': '百佳',
+    'JASONS': 'Market Place / Jasons',
+    'MARKETPLACE': 'Market Place',
+    'AEON': 'AEON',
+    'TASTE': 'TASTE',
+    'FUSION': 'FUSION',
+    'DONKI': 'DON DON DONKI',
+    'MANNINGS': '萬寧',
+    'WATSONS': '屈臣氏',
+    'HKTVMALL': 'HKTVmall'
+}
 
-rows = []
-for item in data:
-    # 1. 解析主類別 (Cat1)
-    cat1 = get_smart_field(item, [
-        'cat1_name', 'cat1_zh', 'cat1_title', 'cat1', 'category1', 'main_category', 'cat_1', 'cat1Name'
-    ])
+def standardize_dataframe(df_input, default_date=today_str):
+    """將任意格式/Header 的 DataFrame 統一轉換為標準格式"""
+    df = df_input.copy()
     
-    # 2. 解析子類別 (Category / Cat2)
-    cat2 = get_smart_field(item, [
-        'cat2_name', 'cat2_zh', 'cat2_title', 'cat2', 'category2', 'sub_category', 'cat_2', 'cat2Name', 'category'
-    ])
+    # 欄位標頭去空白
+    df.columns = [str(c).strip() for c in df.columns]
     
-    # 若類別為列表格式 (e.g. "categories": [{"name": "主類"}, {"name": "子類"}])
-    if (not cat1 or not cat2) and 'categories' in item and isinstance(item['categories'], list):
-        cats = item['categories']
-        if len(cats) > 0 and not cat1:
-            cat1 = extract_text(cats[0])
-        if len(cats) > 1 and not cat2:
-            cat2 = extract_text(cats[1])
+    # 建立映射表
+    rename_dict = {}
+    for standard_col, aliases in HEADER_ALIASES.items():
+        for col in df.columns:
+            if col.lower() in [a.lower() for a in aliases] or any(a in col for a in aliases):
+                rename_dict[col] = standard_col
+                break
 
-    brand = get_smart_field(item, ['brand', 'brand_name', 'brand_zh'])
-    item_name = get_smart_field(item, ['name', 'item_name', 'title', 'name_zh'])
-    item_id = str(item.get('code', item.get('id', '')))
+    df.rename(columns=rename_dict, inplace=True)
+    
+    # 檢查並補充 Missing 欄位
+    if 'date' not in df.columns:
+        df['date'] = default_date
+    else:
+        # 統一日期格式 (例如將 3/8/2026 轉為 2026-08-03)
+        df['date'] = pd.to_datetime(df['date'], errors='coerce', dayfirst=True).dt.strftime('%Y-%m-%d')
+        df['date'] = df['date'].fillna(default_date)
 
-    prices_list = item.get('prices', [])
-    if isinstance(prices_list, list):
-        for price_info in prices_list:
-            if isinstance(price_info, dict):
-                price = price_info.get('price')
-                
-                # 解析超市名稱
-                shop_name = get_smart_field(price_info, [
-                    'shop_name', 'shop_zh', 'shopName', 'shop', 'supermarket', 'store', 'store_name'
-                ])
-                
-                # 若無直接名稱，嘗試用 shop_code 查對照表
-                if not shop_name or shop_name == '其他超市':
-                    raw_code = str(price_info.get('shop_code', price_info.get('shop', ''))).upper()
-                    shop_name = SHOP_MAP.get(raw_code, raw_code if raw_code else '其他超市')
+    for col in ['cat1', 'category', 'item_id', 'brand', 'item_name', 'supermarket', 'price']:
+        if col not in df.columns:
+            df[col] = '未分類' if col in ['cat1', 'category'] else ''
 
-                if price is not None and price != '':
-                    rows.append({
-                        'date': today_str,
-                        'cat1': cat1 if cat1 else '一般主類別',
-                        'category': cat2 if cat2 else '一般子類別',
-                        'item_id': item_id,
-                        'brand': brand,
-                        'item_name': item_name,
-                        'supermarket': shop_name,
-                        'price': price
-                    })
+    # 清理超市名稱與價格
+    df['supermarket'] = df['supermarket'].astype(str).str.upper().str.strip()
+    df['supermarket'] = df['supermarket'].map(lambda x: SHOP_MAP.get(x, x))
+    df['price'] = pd.to_numeric(df['price'], errors='coerce')
+    
+    # 保留標準 8 個欄位
+    required_cols = ['date', 'cat1', 'category', 'item_id', 'brand', 'item_name', 'supermarket', 'price']
+    return df.dropna(subset=['price'])[required_cols]
 
-df_today = pd.DataFrame(rows)
+# ==========================================
+# 步驟 A: 下載今日最新數據 (嘗試 CSV，若失敗則回退至 JSON)
+# ==========================================
+print("⏳ 正在下載消委會最新數據...")
+csv_url = 'https://online-price-watch.consumer.org.hk/opw/opendata/pricewatch_zh-Hant.csv'
+json_url = 'https://online-price-watch.consumer.org.hk/opw/opendata/pricewatch.json'
+headers = {'User-Agent': 'Mozilla/5.0'}
 
-if df_today.empty:
-    print("⚠️ 警告：今日無任何數據下載成功，終止寫入！")
-    exit(1)
+df_today = pd.DataFrame()
 
-print(f"✅ 今日成功提取 {len(df_today)} 筆價格數據！")
+try:
+    df_raw = pd.read_csv(csv_url, encoding='utf-8-sig', storage_options=headers)
+    df_today = standardize_dataframe(df_raw, default_date=today_str)
+    print("✅ 成功從官方 CSV 源抓取並標準化數據！")
+except Exception as e:
+    print(f"⚠️ CSV 下載失敗 ({e})，嘗試切換至 JSON 源...")
+    try:
+        res = requests.get(json_url, headers=headers, timeout=30)
+        res.raise_for_status()
+        data = res.json()
+        
+        rows = []
+        for item in data:
+            for p in item.get('prices', []):
+                rows.append({
+                    'cat1': item.get('cat1'),
+                    'category': item.get('cat2'),
+                    'item_id': item.get('code'),
+                    'brand': item.get('brand'),
+                    'item_name': item.get('name'),
+                    'supermarket': p.get('shop_name', p.get('shop')),
+                    'price': p.get('price')
+                })
+        df_today = standardize_dataframe(pd.DataFrame(rows), default_date=today_str)
+        print("✅ 成功從 JSON 源抓取數據！")
+    except Exception as err:
+        print(f"❌ 今日數據抓取失敗: {err}")
 
-# 追加寫入當月專屬 CSV
+# ==========================================
+# 步驟 B: 整合歷史數據 (3/8, 4/8 與舊 CSV) 並去重
+# ==========================================
 if os.path.exists(monthly_file_path):
-    df_old = pd.read_csv(monthly_file_path)
-    df_old = df_old[df_old['date'] != today_str]
-    df_combined = pd.concat([df_old, df_today], ignore_index=True)
+    print(f"📦 正在整合並標準化既有的檔案: {monthly_file_path}")
+    df_existing = pd.read_csv(monthly_file_path)
+    df_existing_std = standardize_dataframe(df_existing)
+    
+    # 結合今日與過往數據
+    if not df_today.empty:
+        df_all = pd.concat([df_existing_std, df_today], ignore_index=True)
+    else:
+        df_all = df_existing_std
 else:
-    df_combined = df_today
+    df_all = df_today
 
-df_combined.to_csv(monthly_file_path, index=False, encoding='utf-8-sig')
-
-print(f"🎉 成功寫入當月檔案: {monthly_file_path}")
-print(f"📊 當月累積數據量：{len(df_combined)} 行")
+if not df_all.empty:
+    # 去重邏輯：同一天、同產品、同超市，只保留最後一筆
+    df_all.drop_duplicates(subset=['date', 'item_id', 'supermarket'], keep='last', inplace=True)
+    df_all.sort_values(by=['date', 'item_id'], inplace=True)
+    
+    # 存檔
+    df_all.to_csv(monthly_file_path, index=False, encoding='utf-8-sig')
+    print(f"🎉 成功完成整合與儲存！檔案路徑: {monthly_file_path}")
+    print(f"📊 目前數據庫包含總行數: {len(df_all)}")
+    print(f"📅 包含的日期版本: {sorted(df_all['date'].unique().tolist())}")
