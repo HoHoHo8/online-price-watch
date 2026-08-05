@@ -35,9 +35,11 @@ SHOP_MAP = {
 
 def process_scraped_df(df_input, default_date=today_str):
     """
-    清洗數據、格式化日期 (徹底修正日月對調問題與重複欄位報錯)
+    清洗數據、格式化日期 (自動智能解析，防止 YYYY-MM-DD 被誤改)
     """
     df = df_input.copy()
+    if df.empty:
+        return pd.DataFrame()
     
     # 1. 欄位標頭去空白並去除重複欄位名
     df.columns = [str(c).strip() for c in df.columns]
@@ -65,15 +67,13 @@ def process_scraped_df(df_input, default_date=today_str):
             rename_dict[col] = 'offers'
 
     df.rename(columns=rename_dict, inplace=True)
-    
-    # 🚨 關鍵防護：重新命名後再次剔除同名欄位，防止 df[col] 變成 DataFrame 導致 .str 報錯
     df = df.loc[:, ~df.columns.duplicated()]
     
-    # 3. 處理日期（設定 dayfirst=True 避免日月顛倒）
+    # 3. 關鍵修正：採用 format='mixed' 智能解析，不再加 dayfirst
     if 'date' not in df.columns:
         df['date'] = default_date
     else:
-        df['date'] = pd.to_datetime(df['date'], errors='coerce', dayfirst=True).dt.strftime('%Y-%m-%d')
+        df['date'] = pd.to_datetime(df['date'], format='mixed', errors='coerce').dt.strftime('%Y-%m-%d')
         df['date'] = df['date'].fillna(default_date)
 
     # 4. 超市代碼轉中文
@@ -120,21 +120,29 @@ except Exception as e:
     exit(1)
 
 # ==========================================
-# 5. 讀取並重新清洗歷史檔案
+# 5. 讀取並整合歷史檔案
 # ==========================================
+df_existing_clean = pd.DataFrame()
+
 if os.path.exists(monthly_file_path):
-    print(f"📦 正在讀取並清理歷史檔案: {monthly_file_path}")
-    df_existing = pd.read_csv(monthly_file_path)
-    df_existing_clean = process_scraped_df(df_existing)
+    print(f"📦 正在讀取歷史檔案: {monthly_file_path}")
+    try:
+        df_existing = pd.read_csv(monthly_file_path)
+        if not df_existing.empty:
+            df_existing_clean = process_scraped_df(df_existing)
+    except pd.errors.EmptyDataError:
+        print(f"⚠️ {monthly_file_path} 為空檔案，將由今日最新數據覆蓋。")
+    except Exception as e:
+        print(f"⚠️ 讀取舊數據錯誤: {e}")
+
+if not df_existing_clean.empty:
     df_combined = pd.concat([df_existing_clean, df_today], ignore_index=True)
 else:
     df_combined = df_today
 
-# 根據 (日期, 貨品ID, 超市) 進行去重，保留最後紀錄
 df_combined.drop_duplicates(subset=['date', 'item_id', 'supermarket'], keep='last', inplace=True)
 df_combined.sort_values(by=['date', 'item_id'], inplace=True)
 
-# 寫回 CSV
 df_combined.to_csv(monthly_file_path, index=False, encoding='utf-8-sig')
 
 print(f"🎉 數據整合完成！存檔路徑: {monthly_file_path}")
