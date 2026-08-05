@@ -39,27 +39,56 @@ monthly_file_path = f'data/prices_{month_str}.csv'
 
 print(f"📅 當前香港日期: {today_str}")
 
-# 輔助函式：安全提取多語言與多種可能 Key 的欄位
-def parse_field(item, keys):
-    for key in keys:
-        val = item.get(key)
-        if val:
-            if isinstance(val, dict):
-                res = val.get('zh-Hant') or val.get('zh-Hans') or val.get('en') or ''
+# 關鍵修復：遞迴挖取深層 JSON 中的中文/英文名稱
+def extract_text(obj):
+    if not obj:
+        return ''
+    if isinstance(obj, str):
+        return obj.strip()
+    if isinstance(obj, (int, float)):
+        return str(obj)
+    if isinstance(obj, dict):
+        # 1. 優先檢查語言 Key
+        for lang in ['zh-Hant', 'zh_Hant', 'zh-HK', 'zh_HK', 'zh-Hans', 'zh', 'en']:
+            if lang in obj:
+                res = extract_text(obj[lang])
                 if res:
                     return res
-            elif isinstance(val, str) and val.strip():
-                return val.strip()
+        # 2. 若無語言 Key，尋找 name/title 等子物件
+        for sub_key in ['name', 'title', 'label', 'text', 'value']:
+            if sub_key in obj:
+                res = extract_text(obj[sub_key])
+                if res:
+                    return res
+        # 3. 嘗試拿第一個非 code/id 的欄位
+        for k, v in obj.items():
+            if k.lower() not in ['code', 'id', 'key']:
+                res = extract_text(v)
+                if res:
+                    return res
+    if isinstance(obj, list):
+        for elem in obj:
+            res = extract_text(elem)
+            if res:
+                return res
+    return ''
+
+def get_field_value(item, candidate_keys):
+    for key in candidate_keys:
+        if key in item and item[key]:
+            val = extract_text(item[key])
+            if val:
+                return val
     return ''
 
 rows = []
 for item in data:
-    # 針對類別嘗試多種常見的 Key 名稱 (cat1, category1, cat_name1 等)
-    cat1 = parse_field(item, ['cat1', 'category1', 'cat1_name', 'main_category'])
-    cat2 = parse_field(item, ['cat2', 'category2', 'category', 'cat2_name', 'sub_category'])
+    # 搜尋主類別、子類別
+    cat1 = get_field_value(item, ['cat1', 'category1', 'main_category', 'cat1_name'])
+    cat2 = get_field_value(item, ['cat2', 'category2', 'sub_category', 'category', 'cat2_name'])
     
-    brand = parse_field(item, ['brand', 'brand_name'])
-    item_name = parse_field(item, ['name', 'item_name', 'title'])
+    brand = get_field_value(item, ['brand', 'brand_name'])
+    item_name = get_field_value(item, ['name', 'item_name', 'title'])
     item_id = item.get('code', item.get('id', ''))
 
     prices_list = item.get('prices', [])
@@ -68,8 +97,8 @@ for item in data:
             if isinstance(price_info, dict):
                 price = price_info.get('price')
                 
-                # 解析超市名稱
-                shop_name = parse_field(price_info, ['shop_name', 'shop', 'supermarket'])
+                # 搜尋超市名稱
+                shop_name = get_field_value(price_info, ['shop_name', 'shop', 'supermarket', 'store'])
 
                 if price is not None and price != '':
                     rows.append({
@@ -79,7 +108,7 @@ for item in data:
                         'item_id': item_id,
                         'brand': brand,
                         'item_name': item_name,
-                        'supermarket': shop_name,
+                        'supermarket': shop_name if shop_name else '其他超市',
                         'price': price
                     })
 
@@ -94,7 +123,7 @@ print(f"✅ 今日成功提取 {len(df_today)} 筆價格數據！")
 # 追加寫入當月專屬 CSV
 if os.path.exists(monthly_file_path):
     df_old = pd.read_csv(monthly_file_path)
-    # 刪除同日期舊數據（防止重複寫入）
+    # 刪除同日期舊數據（防止重複寫入爛數據）
     df_old = df_old[df_old['date'] != today_str]
     df_combined = pd.concat([df_old, df_today], ignore_index=True)
 else:
