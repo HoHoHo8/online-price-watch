@@ -6,12 +6,12 @@ import plotly.express as px
 from datetime import datetime, timedelta
 
 # 1. 頁面設定
-st.set_page_config(page_title="香港網上超市價格追蹤系統", layout="wide")
+st.set_page_config(page_title="香港網上超市價格與優惠追蹤系統", layout="wide")
 
 # ---------------------------------------------------------
 # 🔒 密碼登入機制設定
 # ---------------------------------------------------------
-APP_PASSWORD = "zakuissmart_168"  # <--- 請修改這裡的密碼！
+APP_PASSWORD = "zakuissmart_168"  # <--- 密碼設定
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
@@ -42,7 +42,7 @@ if st.sidebar.button("🚪 安全登出"):
     st.session_state.authenticated = False
     st.rerun()
 
-# 增加手動刷新數據快取按鈕
+# 手動刷新數據快取按鈕
 if st.sidebar.button("🔄 強制刷新最新數據"):
     st.cache_data.clear()
     st.success("快取已清除！正在讀取最新數據...")
@@ -52,7 +52,7 @@ st.sidebar.markdown("---")
 st.title("🛒 香港網上超市價格追蹤 & 趨勢分析")
 
 # 讀取歷史資料 (自動讀取 data/*.csv)
-@st.cache_data(ttl=60)  # 每 60 秒可重新檢查
+@st.cache_data(ttl=60)
 def load_data():
     csv_files = glob.glob('data/*.csv')
     if not csv_files:
@@ -63,22 +63,26 @@ def load_data():
     
     df['date'] = pd.to_datetime(df['date'], format='mixed', dayfirst=False)
     
+    # 欄位補全與清洗
     if 'cat1' not in df.columns:
         df['cat1'] = '一般主類別'
     if 'category' not in df.columns:
         df['category'] = df['cat1']
+    if 'offers' not in df.columns:
+        df['offers'] = '—'
         
     df['cat1'] = df['cat1'].fillna('未分類主類別')
     df['category'] = df['category'].fillna('未分類子類別')
     df['brand'] = df['brand'].fillna('其他品牌')
     df['item_name'] = df['item_name'].fillna('未命名貨品')
+    df['supermarket'] = df['supermarket'].fillna('其他超市')
+    df['offers'] = df['offers'].fillna('—').astype(str).str.strip().replace({'': '—', 'nan': '—', 'None': '—'})
     df['price'] = pd.to_numeric(df['price'], errors='coerce')
     
     return df.dropna(subset=['price', 'date'])
 
 try:
     df = load_data()
-    # 取得整個資料庫的最新更新日期
     system_latest_date = df['date'].max().strftime('%Y-%m-%d')
     st.caption(f"🌐 數據庫最新累積更新日期：**{system_latest_date}**")
 except Exception as e:
@@ -109,10 +113,15 @@ if page == "單一貨品深度追蹤":
 
     df_filtered = df_filtered[df_filtered['brand'].isin(selected_brands)] if selected_brands else df_filtered
 
+    # 🏷️ 優惠篩選器 (補回)
+    only_offers = st.sidebar.checkbox("🏷️ 僅顯示含有特別優惠/促銷的商品")
+    if only_offers:
+        df_filtered = df_filtered[df_filtered['offers'] != '—']
+
     items = sorted(df_filtered['item_name'].dropna().unique().tolist())
 
     if not items:
-        st.warning("⚠️ 找不到符合條件的貨品，請重新勾選品牌或類別！")
+        st.warning("⚠️ 找不到符合條件的貨品，請重新勾選品牌、類別或取消優惠勾選！")
         st.stop()
 
     selected_item = st.sidebar.selectbox("3. 選擇貨品", options=items)
@@ -127,7 +136,9 @@ if page == "單一貨品深度追蹤":
             shop_data = data[data['supermarket'] == shop].sort_values('date')
             if shop_data.empty:
                 continue
-            curr_price = shop_data.iloc[-1]['price']
+            latest_row = shop_data.iloc[-1]
+            curr_price = latest_row['price']
+            curr_offer = latest_row.get('offers', '—')
             
             def get_past_price(days):
                 target_date = latest_date - timedelta(days=days)
@@ -142,6 +153,7 @@ if page == "單一貨品深度追蹤":
             metrics.append({
                 '超市': shop,
                 '最新售價 ($)': f"${curr_price:.2f}",
+                '特別優惠': curr_offer,
                 'DoD (按日)': f"{dod:+.2f}%" if dod is not None else "N/A",
                 'WoW (按周)': f"{wow:+.2f}%" if wow is not None else "N/A",
                 'MoM (按月)': f"{mom:+.2f}%" if mom is not None else "N/A",
@@ -151,14 +163,21 @@ if page == "單一貨品深度追蹤":
 
     if not item_df.empty:
         item_latest_date_str = item_df['date'].max().strftime('%Y-%m-%d')
-        st.subheader(f"📌 {selected_item} - 現價及歷史變動 (截至 {item_latest_date_str})")
+        st.subheader(f"📌 {selected_item} - 現價、優惠及歷史變動 (截至 {item_latest_date_str})")
         
-        # 提示使用者該貨品是否有最新一日的數據
         if item_latest_date_str < system_latest_date:
-            st.warning(f"⚠️ 注意：此貨品在最新日期 ({system_latest_date}) 暫無數據，上方顯示為該貨品的最後紀錄日期 ({item_latest_date_str})。")
+            st.warning(f"⚠️ 注意：此貨品在最新日期 ({system_latest_date}) 暫無數據，下方顯示為該貨品的最後紀錄日期 ({item_latest_date_str})。")
 
+        # 顯示指標表格 (含特別優惠欄位)
         metrics_df = calculate_metrics(item_df)
-        st.dataframe(metrics_df, use_container_width=True)
+        st.dataframe(
+            metrics_df, 
+            column_config={
+                "特別優惠": st.column_config.TextColumn("特別優惠", help="超市當前促銷/折扣活動")
+            },
+            use_container_width=True,
+            hide_index=True
+        )
 
         st.subheader("📈 歷史價格走勢圖")
         fig = px.line(
@@ -172,7 +191,7 @@ if page == "單一貨品深度追蹤":
 
 
 # ==========================================
-# 頁面 2：同類別貨品價格比較 (Cat1 / Category / Brand)
+# 頁面 2：同類別貨品價格比較 (Cat1 / Category)
 # ==========================================
 elif page == "同類別貨品價格比較 (Cat1 / Category)":
     st.sidebar.header("📊 類別比較條件")
@@ -200,6 +219,11 @@ elif page == "同類別貨品價格比較 (Cat1 / Category)":
     else:
         cat_df = df_cat
         title_tag = cat_tag
+
+    # 🏷️ 優惠篩選器 (補回)
+    only_offers = st.sidebar.checkbox("🏷️ 僅顯示含有特別優惠的貨品")
+    if only_offers:
+        cat_df = cat_df[cat_df['offers'] != '—']
 
     st.subheader(f"🏷️ 品類數據總覽：【{title_tag}】")
 
@@ -235,11 +259,22 @@ elif page == "同類別貨品價格比較 (Cat1 / Category)":
 
     st.markdown("---")
 
-    st.subheader("📋 同類別貨品現時價格排行榜 (最便宜 ➡️ 最貴)")
-    summary_table = latest_cat_df.groupby(['item_name', 'brand', 'supermarket'])['price'].min().reset_index()
+    st.subheader("📋 同類別貨品現時價格與優惠排行榜 (最便宜 ➡️ 最貴)")
+    
+    # 補回「特別優惠」整合表格
+    summary_table = latest_cat_df[['item_name', 'brand', 'supermarket', 'price', 'offers']].copy()
     summary_table = summary_table.sort_values(by='price', ascending=True)
-    summary_table.columns = ['貨品名稱', '品牌', '超市', '最新價格 (HKD)']
-    st.dataframe(summary_table, use_container_width=True)
+    summary_table.columns = ['貨品名稱', '品牌', '超市', '最新價格 (HKD)', '特別優惠']
+    
+    st.dataframe(
+        summary_table, 
+        column_config={
+            "最新價格 (HKD)": st.column_config.NumberColumn("最新價格 (HKD)", format="$%.2f"),
+            "特別優惠": st.column_config.TextColumn("特別優惠", help="超市當前促銷/折扣活動")
+        },
+        use_container_width=True,
+        hide_index=True
+    )
 
     st.subheader("📈 同類別貨品歷史價格走勢比較")
     top_items = cat_df['item_name'].unique().tolist()[:5]
