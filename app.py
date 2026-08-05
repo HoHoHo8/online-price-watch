@@ -51,18 +51,31 @@ if st.sidebar.button("🔄 強制刷新最新數據"):
 st.sidebar.markdown("---")
 st.title("🛒 香港網上超市價格追蹤 & 趨勢分析")
 
-# 讀取歷史資料 (自動讀取 data/*.csv)
+# ---------------------------------------------------------
+# 📊 讀取歷史資料 (唯一且完整的 load_data 函式)
+# ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def load_data():
     csv_files = glob.glob('data/*.csv')
     if not csv_files:
         raise FileNotFoundError("未在 data/ 資料夾中找到任何 CSV 數據檔案！")
         
-    df_list = [pd.read_csv(f) for f in csv_files]
+    df_list = []
+    for f in csv_files:
+        try:
+            temp_df = pd.read_csv(f)
+            if not temp_df.empty:
+                df_list.append(temp_df)
+        except pd.errors.EmptyDataError:
+            continue
+
+    if not df_list:
+        raise FileNotFoundError("data/ 資料夾內的 CSV 檔案皆無有效數據！")
+        
     df = pd.concat(df_list, ignore_index=True)
     
-    # 🚨 關鍵修正：強制設定 dayfirst=True 確保 日/月/年 (如 05/08/2026) 不會被讀成 5月8日
-    df['date'] = pd.to_datetime(df['date'], errors='coerce', dayfirst=True)
+    # 關鍵修正：採用 format='mixed' 智能解析，防止 YYYY-MM-DD 被反向硬改
+    df['date'] = pd.to_datetime(df['date'], format='mixed', errors='coerce')
     
     # 欄位補全與清洗
     if 'cat1' not in df.columns:
