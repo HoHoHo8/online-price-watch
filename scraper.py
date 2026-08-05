@@ -1,7 +1,7 @@
 import os
 import requests
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timezone, timedelta
 
 # 確保 data 資料夾存在
 os.makedirs('data', exist_ok=True)
@@ -17,9 +17,15 @@ except Exception as e:
     print(f"❌ 下載數據失敗: {e}")
     exit(1)
 
-today_str = datetime.now().strftime('%Y-%m-%d')
-month_str = datetime.now().strftime('%Y_%m')
+# 【關鍵修復】強制使用香港時間 (UTC+8)
+hkt_timezone = timezone(timedelta(hours=8))
+now_hkt = datetime.now(hkt_timezone)
+
+today_str = now_hkt.strftime('%Y-%m-%d')
+month_str = now_hkt.strftime('%Y_%m')
 monthly_file_path = f'data/prices_{month_str}.csv'
+
+print(f"📅 當前香港日期: {today_str}")
 
 rows = []
 for item in data:
@@ -29,7 +35,6 @@ for item in data:
     brand = item.get('brand', '')
     item_name = item.get('name', '')
     
-    # 修正重點：prices 是列表 (List)，遍歷每個超市字典
     prices_list = item.get('prices', [])
     if isinstance(prices_list, list):
         for price_info in prices_list:
@@ -51,11 +56,16 @@ for item in data:
 
 df_today = pd.DataFrame(rows)
 
+if df_today.empty:
+    print("⚠️ 警告：今日無任何數據下載成功，終止寫入！")
+    exit(1)
+
 # 追加寫入當月專屬 CSV
 if os.path.exists(monthly_file_path):
     df_old = pd.read_csv(monthly_file_path)
+    # 刪除同日期舊數據（防止同一天手動執行多次時數據重複）
+    df_old = df_old[df_old['date'] != today_str]
     df_combined = pd.concat([df_old, df_today], ignore_index=True)
-    df_combined = df_combined.drop_duplicates(subset=['date', 'item_id', 'supermarket'], keep='last')
 else:
     df_combined = df_today
 
