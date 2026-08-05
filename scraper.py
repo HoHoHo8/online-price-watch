@@ -35,14 +35,15 @@ SHOP_MAP = {
 
 def process_scraped_df(df_input, default_date=today_str):
     """
-    清洗數據、格式化日期 (徹底修正日月對調問題) 並進行欄位標準化
+    清洗數據、格式化日期 (徹底修正日月對調問題與重複欄位報錯)
     """
     df = df_input.copy()
     
-    # 欄位標頭去空白
+    # 1. 欄位標頭去空白並去除重複欄位名
     df.columns = [str(c).strip() for c in df.columns]
+    df = df.loc[:, ~df.columns.duplicated()]
     
-    # 重命名欄位對照
+    # 2. 重命名欄位對照
     rename_dict = {}
     for col in df.columns:
         c_lower = col.lower()
@@ -65,35 +66,38 @@ def process_scraped_df(df_input, default_date=today_str):
 
     df.rename(columns=rename_dict, inplace=True)
     
-    # 🚨 關鍵修正：強制使用 dayfirst=True 避免 05/08/2026 被誤讀成 5月8日
+    # 🚨 關鍵防護：重新命名後再次剔除同名欄位，防止 df[col] 變成 DataFrame 導致 .str 報錯
+    df = df.loc[:, ~df.columns.duplicated()]
+    
+    # 3. 處理日期（設定 dayfirst=True 避免日月顛倒）
     if 'date' not in df.columns:
         df['date'] = default_date
     else:
         df['date'] = pd.to_datetime(df['date'], errors='coerce', dayfirst=True).dt.strftime('%Y-%m-%d')
         df['date'] = df['date'].fillna(default_date)
 
-    # 超市代碼轉中文
+    # 4. 超市代碼轉中文
     if 'supermarket' in df.columns:
         df['supermarket'] = df['supermarket'].fillna('').astype(str).str.strip().str.upper()
         df['supermarket'] = df['supermarket'].apply(lambda x: SHOP_MAP.get(x, x if x != '' else '其他超市'))
     else:
         df['supermarket'] = '其他超市'
 
-    # 優惠資訊清洗
+    # 5. 優惠資訊清洗
     if 'offers' in df.columns:
         df['offers'] = df['offers'].fillna('—').astype(str).str.strip()
         df['offers'] = df['offers'].replace({'': '—', 'nan': '—', 'None': '—'})
     else:
         df['offers'] = '—'
 
-    # 基礎文字欄位清洗
+    # 6. 基礎文字欄位清洗
     for col in ['cat1', 'category', 'item_id', 'brand', 'item_name']:
         if col not in df.columns:
             df[col] = '未分類' if 'cat' in col else ''
         else:
             df[col] = df[col].fillna('').astype(str).str.strip()
 
-    # 價格轉數值
+    # 7. 價格轉數值
     df['price'] = pd.to_numeric(df['price'], errors='coerce')
     
     required_cols = ['date', 'cat1', 'category', 'item_id', 'brand', 'item_name', 'supermarket', 'price', 'offers']
@@ -116,7 +120,7 @@ except Exception as e:
     exit(1)
 
 # ==========================================
-# 5. 讀取並重新清洗歷史檔案（徹底校正舊數據的錯誤日期）
+# 5. 讀取並重新清洗歷史檔案
 # ==========================================
 if os.path.exists(monthly_file_path):
     print(f"📦 正在讀取並清理歷史檔案: {monthly_file_path}")
