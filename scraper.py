@@ -1,6 +1,7 @@
 import os
 import requests
 import pandas as pd
+import json
 from datetime import datetime, timezone, timedelta
 
 # 確保 data 資料夾存在
@@ -29,6 +30,29 @@ except Exception as e:
     print(f"❌ 下載數據失敗: {e}")
     exit(1)
 
+# 印出第 1 筆數據結構，供 GitHub Actions Log 查驗真實欄位名稱
+if data and len(data) > 0:
+    print("\n🔍 --- [DEBUG Log] 第一筆商品數據結構預覽 ---")
+    print(json.dumps(data[0], ensure_ascii=False, indent=2)[:1200])
+    print("-----------------------------------------\n")
+
+# 香港常見超市代碼對照表 (當 API 僅傳回代碼時自動轉換)
+SHOP_MAP = {
+    'WELLCOME': '惠康',
+    'PARKNSHOP': '百佳',
+    'MARKETPLACE': 'Market Place',
+    'AEON': 'AEON',
+    'TASTE': 'TASTE',
+    'FUSION': 'FUSION',
+    'DONKI': 'DON DON DONKI',
+    'DONGURI': 'DON DON DONKI',
+    'MANNINGS': '萬寧',
+    'WATSONS': '屈臣氏',
+    'HKTVMALL': 'HKTVmall',
+    'DAISO': 'Daiso',
+    'DCH': '大昌食品'
+}
+
 # 強制使用香港時間 (UTC+8)
 hkt_timezone = timezone(timedelta(hours=8))
 now_hkt = datetime.now(hkt_timezone)
@@ -39,7 +63,7 @@ monthly_file_path = f'data/prices_{month_str}.csv'
 
 print(f"📅 當前香港日期: {today_str}")
 
-# 關鍵修復：遞迴挖取深層 JSON 中的中文/英文名稱
+# 萬能文字提取函式
 def extract_text(obj):
     if not obj:
         return ''
@@ -48,21 +72,21 @@ def extract_text(obj):
     if isinstance(obj, (int, float)):
         return str(obj)
     if isinstance(obj, dict):
-        # 1. 優先檢查語言 Key
-        for lang in ['zh-Hant', 'zh_Hant', 'zh-HK', 'zh_HK', 'zh-Hans', 'zh', 'en']:
+        # 1. 優先取中文/英文語言 Key
+        for lang in ['zh-Hant', 'zh_Hant', 'zh-HK', 'zh_HK', 'zh-Hans', 'zh', 'en', 'name_zh', 'title_zh']:
             if lang in obj:
                 res = extract_text(obj[lang])
                 if res:
                     return res
-        # 2. 若無語言 Key，尋找 name/title 等子物件
-        for sub_key in ['name', 'title', 'label', 'text', 'value']:
+        # 2. 尋找 name / title / label 鍵
+        for sub_key in ['name', 'title', 'label', 'text', 'value', 'zh_name']:
             if sub_key in obj:
                 res = extract_text(obj[sub_key])
                 if res:
                     return res
-        # 3. 嘗試拿第一個非 code/id 的欄位
+        # 3. 遍歷非 code/id 欄位
         for k, v in obj.items():
-            if k.lower() not in ['code', 'id', 'key']:
+            if k.lower() not in ['code', 'id', 'key', 'shop_code']:
                 res = extract_text(v)
                 if res:
                     return res
@@ -73,9 +97,9 @@ def extract_text(obj):
                 return res
     return ''
 
-def get_field_value(item, candidate_keys):
-    for key in candidate_keys:
-        if key in item and item[key]:
+def get_smart_field(item, keys):
+    for key in keys:
+        if key in item and item[key] is not None:
             val = extract_text(item[key])
             if val:
                 return val
@@ -83,13 +107,27 @@ def get_field_value(item, candidate_keys):
 
 rows = []
 for item in data:
-    # 搜尋主類別、子類別
-    cat1 = get_field_value(item, ['cat1', 'category1', 'main_category', 'cat1_name'])
-    cat2 = get_field_value(item, ['cat2', 'category2', 'sub_category', 'category', 'cat2_name'])
+    # 1. 解析主類別 (Cat1)
+    cat1 = get_smart_field(item, [
+        'cat1_name', 'cat1_zh', 'cat1_title', 'cat1', 'category1', 'main_category', 'cat_1', 'cat1Name'
+    ])
     
-    brand = get_field_value(item, ['brand', 'brand_name'])
-    item_name = get_field_value(item, ['name', 'item_name', 'title'])
-    item_id = item.get('code', item.get('id', ''))
+    # 2. 解析子類別 (Category / Cat2)
+    cat2 = get_smart_field(item, [
+        'cat2_name', 'cat2_zh', 'cat2_title', 'cat2', 'category2', 'sub_category', 'cat_2', 'cat2Name', 'category'
+    ])
+    
+    # 若類別為列表格式 (e.g. "categories": [{"name": "主類"}, {"name": "子類"}])
+    if (not cat1 or not cat2) and 'categories' in item and isinstance(item['categories'], list):
+        cats = item['categories']
+        if len(cats) > 0 and not cat1:
+            cat1 = extract_text(cats[0])
+        if len(cats) > 1 and not cat2:
+            cat2 = extract_text(cats[1])
+
+    brand = get_smart_field(item, ['brand', 'brand_name', 'brand_zh'])
+    item_name = get_smart_field(item, ['name', 'item_name', 'title', 'name_zh'])
+    item_id = str(item.get('code', item.get('id', '')))
 
     prices_list = item.get('prices', [])
     if isinstance(prices_list, list):
@@ -97,18 +135,25 @@ for item in data:
             if isinstance(price_info, dict):
                 price = price_info.get('price')
                 
-                # 搜尋超市名稱
-                shop_name = get_field_value(price_info, ['shop_name', 'shop', 'supermarket', 'store'])
+                # 解析超市名稱
+                shop_name = get_smart_field(price_info, [
+                    'shop_name', 'shop_zh', 'shopName', 'shop', 'supermarket', 'store', 'store_name'
+                ])
+                
+                # 若無直接名稱，嘗試用 shop_code 查對照表
+                if not shop_name or shop_name == '其他超市':
+                    raw_code = str(price_info.get('shop_code', price_info.get('shop', ''))).upper()
+                    shop_name = SHOP_MAP.get(raw_code, raw_code if raw_code else '其他超市')
 
                 if price is not None and price != '':
                     rows.append({
                         'date': today_str,
-                        'cat1': cat1 if cat1 else '未分類主類別',
-                        'category': cat2 if cat2 else '未分類子類別',
+                        'cat1': cat1 if cat1 else '一般主類別',
+                        'category': cat2 if cat2 else '一般子類別',
                         'item_id': item_id,
                         'brand': brand,
                         'item_name': item_name,
-                        'supermarket': shop_name if shop_name else '其他超市',
+                        'supermarket': shop_name,
                         'price': price
                     })
 
@@ -123,7 +168,6 @@ print(f"✅ 今日成功提取 {len(df_today)} 筆價格數據！")
 # 追加寫入當月專屬 CSV
 if os.path.exists(monthly_file_path):
     df_old = pd.read_csv(monthly_file_path)
-    # 刪除同日期舊數據（防止重複寫入爛數據）
     df_old = df_old[df_old['date'] != today_str]
     df_combined = pd.concat([df_old, df_today], ignore_index=True)
 else:
