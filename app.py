@@ -42,11 +42,17 @@ if st.sidebar.button("🚪 安全登出"):
     st.session_state.authenticated = False
     st.rerun()
 
+# 增加手動刷新數據快取按鈕
+if st.sidebar.button("🔄 強制刷新最新數據"):
+    st.cache_data.clear()
+    st.success("快取已清除！正在讀取最新數據...")
+    st.rerun()
+
 st.sidebar.markdown("---")
 st.title("🛒 香港網上超市價格追蹤 & 趨勢分析")
 
 # 讀取歷史資料 (自動讀取 data/*.csv)
-@st.cache_data(ttl=10)
+@st.cache_data(ttl=60)  # 每 60 秒可重新檢查
 def load_data():
     csv_files = glob.glob('data/*.csv')
     if not csv_files:
@@ -72,11 +78,14 @@ def load_data():
 
 try:
     df = load_data()
+    # 取得整個資料庫的最新更新日期
+    system_latest_date = df['date'].max().strftime('%Y-%m-%d')
+    st.caption(f"🌐 數據庫最新累積更新日期：**{system_latest_date}**")
 except Exception as e:
     st.error(f"未搵到歷史數據或格式有誤，請檢查 data/ 資料夾！錯誤訊息: {e}")
     st.stop()
 
-# 側邊欄：分頁選單 (新增第 3 個頁面選項)
+# 側邊欄：分頁選單
 page = st.sidebar.radio("📌 請選擇分析功能", [
     "單一貨品深度追蹤", 
     "同類別貨品價格比較 (Cat1 / Category)",
@@ -141,9 +150,13 @@ if page == "單一貨品深度追蹤":
         return pd.DataFrame(metrics)
 
     if not item_df.empty:
-        latest_date_str = item_df['date'].max().strftime('%Y-%m-%d')
-        st.subheader(f"📌 {selected_item} - 現價及歷史變動 (截至 {latest_date_str})")
+        item_latest_date_str = item_df['date'].max().strftime('%Y-%m-%d')
+        st.subheader(f"📌 {selected_item} - 現價及歷史變動 (截至 {item_latest_date_str})")
         
+        # 提示使用者該貨品是否有最新一日的數據
+        if item_latest_date_str < system_latest_date:
+            st.warning(f"⚠️ 注意：此貨品在最新日期 ({system_latest_date}) 暫無數據，上方顯示為該貨品的最後紀錄日期 ({item_latest_date_str})。")
+
         metrics_df = calculate_metrics(item_df)
         st.dataframe(metrics_df, use_container_width=True)
 
@@ -249,16 +262,14 @@ elif page == "同類別貨品價格比較 (Cat1 / Category)":
 
 
 # ==========================================
-# 🆕 頁面 3：品類整體價格變動與通脹分析 (Macro Insights)
+# 頁面 3：品類整體價格變動與通脹分析 (Macro Insights)
 # ==========================================
 elif page == "品類整體價格變動與通脹分析 (Macro Insights)":
     st.sidebar.header("📉 品類宏觀分析條件")
 
-    # 1. 主類別選擇
     cat1_list = sorted(df['cat1'].dropna().unique().tolist())
     selected_cat1 = st.sidebar.selectbox("選擇分析主類別 (Cat1)", options=cat1_list)
 
-    # 2. 連動子類別
     df_macro = df[df['cat1'] == selected_cat1]
     cat2_list = sorted(df_macro['category'].dropna().unique().tolist())
     selected_cat2 = st.sidebar.selectbox("選擇分析子類別 (Category)", options=["全選子類別"] + cat2_list)
@@ -275,12 +286,10 @@ elif page == "品類整體價格變動與通脹分析 (Macro Insights)":
         st.warning("⚠️ 該類別暫無數據！")
         st.stop()
 
-    # 計算每日品類平均價格 (均價)
     daily_avg = df_macro.groupby('date')['price'].mean().reset_index().sort_values('date')
     latest_date = daily_avg['date'].max()
     latest_avg_price = daily_avg.iloc[-1]['price']
 
-    # 計算 DoD, WoW, MoM, YoY 全品類整體變動率
     def get_cat_past_avg(days):
         target_date = latest_date - timedelta(days=days)
         past_df = daily_avg[daily_avg['date'] <= target_date]
@@ -291,7 +300,6 @@ elif page == "品類整體價格變動與通脹分析 (Macro Insights)":
     avg_mom = ((latest_avg_price - get_cat_past_avg(30)) / get_cat_past_avg(30) * 100) if get_cat_past_avg(30) else None
     avg_yoy = ((latest_avg_price - get_cat_past_avg(365)) / get_cat_past_avg(365) * 100) if get_cat_past_avg(365) else None
 
-    # 顯示整體變動 KPI 卡片
     k1, k2, k3, k4 = st.columns(4)
     with k1:
         st.metric("📅 品類 DoD (按日變動)", 
@@ -312,7 +320,6 @@ elif page == "品類整體價格變動與通脹分析 (Macro Insights)":
 
     st.markdown("---")
 
-    # 1. 全品類平均價格歷史走勢圖
     st.subheader("📈 品類平均價格指數走勢圖 (按日/週/月累積)")
     fig_macro = px.line(
         daily_avg, x='date', y='price',
@@ -324,7 +331,6 @@ elif page == "品類整體價格變動與通脹分析 (Macro Insights)":
     fig_macro.update_layout(hovermode="x unified")
     st.plotly_chart(fig_macro, use_container_width=True)
 
-    # 2. 各大超市在該品類的平均價格變動比較
     st.subheader("🏪 各大超市在該品類的均價走勢比較")
     shop_daily_avg = df_macro.groupby(['date', 'supermarket'])['price'].mean().reset_index()
     
