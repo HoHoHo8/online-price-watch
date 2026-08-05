@@ -17,7 +17,7 @@ except Exception as e:
     print(f"❌ 下載數據失敗: {e}")
     exit(1)
 
-# 【關鍵修復】強制使用香港時間 (UTC+8)
+# 強制使用香港時間 (UTC+8)
 hkt_timezone = timezone(timedelta(hours=8))
 now_hkt = datetime.now(hkt_timezone)
 
@@ -27,22 +27,34 @@ monthly_file_path = f'data/prices_{month_str}.csv'
 
 print(f"📅 當前香港日期: {today_str}")
 
+# 輔助函式：安全提取多語言欄位 (優先取繁體中文)
+def parse_multilingual(field):
+    if isinstance(field, dict):
+        return field.get('zh-Hant') or field.get('zh-Hans') or field.get('en') or ''
+    elif isinstance(field, str):
+        return field
+    return ''
+
 rows = []
 for item in data:
-    cat1 = item.get('cat1', '')
-    cat2 = item.get('cat2', '')
+    # 解析類別、品牌、貨品名稱（自動處理 Dict 物件）
+    cat1 = parse_multilingual(item.get('cat1'))
+    cat2 = parse_multilingual(item.get('cat2'))
+    brand = parse_multilingual(item.get('brand'))
+    item_name = parse_multilingual(item.get('name'))
     item_id = item.get('code', '')
-    brand = item.get('brand', '')
-    item_name = item.get('name', '')
-    
+
     prices_list = item.get('prices', [])
     if isinstance(prices_list, list):
         for price_info in prices_list:
             if isinstance(price_info, dict):
                 price = price_info.get('price')
-                shop_name = price_info.get('shop_name', price_info.get('shop', ''))
                 
-                if price is not None:
+                # 超市名稱同樣處理多語言
+                raw_shop = price_info.get('shop_name', price_info.get('shop', ''))
+                shop_name = parse_multilingual(raw_shop)
+
+                if price is not None and price != '':
                     rows.append({
                         'date': today_str,
                         'cat1': cat1,
@@ -60,10 +72,12 @@ if df_today.empty:
     print("⚠️ 警告：今日無任何數據下載成功，終止寫入！")
     exit(1)
 
+print(f"✅ 今日成功提取 {len(df_today)} 筆價格數據！")
+
 # 追加寫入當月專屬 CSV
 if os.path.exists(monthly_file_path):
     df_old = pd.read_csv(monthly_file_path)
-    # 刪除同日期舊數據（防止同一天手動執行多次時數據重複）
+    # 刪除同日期舊數據（防止重複寫入爛數據）
     df_old = df_old[df_old['date'] != today_str]
     df_combined = pd.concat([df_old, df_today], ignore_index=True)
 else:
