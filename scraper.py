@@ -9,10 +9,22 @@ os.makedirs('data', exist_ok=True)
 url = 'https://online-price-watch.consumer.org.hk/opw/opendata/pricewatch.json'
 
 print("⏳ 正在從消委會下載最新價格數據...")
+
+# 設定偽裝 Headers
+headers = {
+    'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+    'Accept': 'application/json, text/plain, */*',
+    'Accept-Language': 'zh-TW,zh;q=0.9,en-US;q=0.8,en;q=0.7',
+    'Referer': 'https://online-price-watch.consumer.org.hk/',
+    'Origin': 'https://online-price-watch.consumer.org.hk'
+}
+
 try:
-    response = requests.get(url, timeout=30)
+    session = requests.Session()
+    response = session.get(url, headers=headers, timeout=30)
     response.raise_for_status()
     data = response.json()
+    print("✅ 數據下載成功！")
 except Exception as e:
     print(f"❌ 下載數據失敗: {e}")
     exit(1)
@@ -37,7 +49,6 @@ def parse_multilingual(field):
 
 rows = []
 for item in data:
-    # 解析類別、品牌、貨品名稱（自動處理 Dict 物件）
     cat1 = parse_multilingual(item.get('cat1'))
     cat2 = parse_multilingual(item.get('cat2'))
     brand = parse_multilingual(item.get('brand'))
@@ -50,7 +61,6 @@ for item in data:
             if isinstance(price_info, dict):
                 price = price_info.get('price')
                 
-                # 超市名稱同樣處理多語言
                 raw_shop = price_info.get('shop_name', price_info.get('shop', ''))
                 shop_name = parse_multilingual(raw_shop)
 
@@ -77,7 +87,6 @@ print(f"✅ 今日成功提取 {len(df_today)} 筆價格數據！")
 # 追加寫入當月專屬 CSV
 if os.path.exists(monthly_file_path):
     df_old = pd.read_csv(monthly_file_path)
-    # 刪除同日期舊數據（防止重複寫入爛數據）
     df_old = df_old[df_old['date'] != today_str]
     df_combined = pd.concat([df_old, df_today], ignore_index=True)
 else:
