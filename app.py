@@ -61,7 +61,8 @@ def load_data():
     df_list = [pd.read_csv(f) for f in csv_files]
     df = pd.concat(df_list, ignore_index=True)
     
-    df['date'] = pd.to_datetime(df['date'], format='mixed', dayfirst=False)
+    # 🚨 關鍵修正：強制設定 dayfirst=True 確保 日/月/年 (如 05/08/2026) 不會被讀成 5月8日
+    df['date'] = pd.to_datetime(df['date'], errors='coerce', dayfirst=True)
     
     # 欄位補全與清洗
     if 'cat1' not in df.columns:
@@ -113,7 +114,7 @@ if page == "單一貨品深度追蹤":
 
     df_filtered = df_filtered[df_filtered['brand'].isin(selected_brands)] if selected_brands else df_filtered
 
-    # 🏷️ 優惠篩選器 (補回)
+    # 🏷️ 優惠篩選器
     only_offers = st.sidebar.checkbox("🏷️ 僅顯示含有特別優惠/促銷的商品")
     if only_offers:
         df_filtered = df_filtered[df_filtered['offers'] != '—']
@@ -121,7 +122,7 @@ if page == "單一貨品深度追蹤":
     items = sorted(df_filtered['item_name'].dropna().unique().tolist())
 
     if not items:
-        st.warning("⚠️ 找不到符合條件的貨品，請重新勾選品牌、類別或取消優惠勾選！")
+        st.warning("⚠️ 找不到符合條件的貨品，請重新勾選品牌或類別！")
         st.stop()
 
     selected_item = st.sidebar.selectbox("3. 選擇貨品", options=items)
@@ -168,7 +169,6 @@ if page == "單一貨品深度追蹤":
         if item_latest_date_str < system_latest_date:
             st.warning(f"⚠️ 注意：此貨品在最新日期 ({system_latest_date}) 暫無數據，下方顯示為該貨品的最後紀錄日期 ({item_latest_date_str})。")
 
-        # 顯示指標表格 (含特別優惠欄位)
         metrics_df = calculate_metrics(item_df)
         st.dataframe(
             metrics_df, 
@@ -220,7 +220,6 @@ elif page == "同類別貨品價格比較 (Cat1 / Category)":
         cat_df = df_cat
         title_tag = cat_tag
 
-    # 🏷️ 優惠篩選器 (補回)
     only_offers = st.sidebar.checkbox("🏷️ 僅顯示含有特別優惠的貨品")
     if only_offers:
         cat_df = cat_df[cat_df['offers'] != '—']
@@ -261,7 +260,6 @@ elif page == "同類別貨品價格比較 (Cat1 / Category)":
 
     st.subheader("📋 同類別貨品現時價格與優惠排行榜 (最便宜 ➡️ 最貴)")
     
-    # 補回「特別優惠」整合表格
     summary_table = latest_cat_df[['item_name', 'brand', 'supermarket', 'price', 'offers']].copy()
     summary_table = summary_table.sort_values(by='price', ascending=True)
     summary_table.columns = ['貨品名稱', '品牌', '超市', '最新價格 (HKD)', '特別優惠']
