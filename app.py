@@ -1,5 +1,6 @@
 import glob
 import os
+import re
 import streamlit as st
 import pandas as pd
 import plotly.express as px
@@ -52,8 +53,36 @@ st.sidebar.markdown("---")
 st.title("🛒 香港網上超市價格追蹤 & 趨勢分析")
 
 # ---------------------------------------------------------
-# 📊 讀取歷史資料 (精確日期解析)
+# 📊 讀取歷史資料 (自動校正 2026-03-08 至 2026-07-08 的倒置日期)
 # ---------------------------------------------------------
+def fix_inverted_date(date_str):
+    """
+    強效校正函數：將原本被誤寫為 2026-MM-08 (MM < 08) 的日期，修復回 2026-08-MM
+    """
+    if pd.isna(date_str):
+        return date_str
+    
+    s = str(date_str).strip()
+    
+    # 正則匹配 YYYY-MM-DD
+    match = re.match(r'^(\d{4})-(\d{2})-(\d{2})', s)
+    if match:
+        year, month, day = match.groups()
+        # 如果年份是 2026，且 day 是 '08'，但 month 是 '01'~'07'，代表月日顛倒了！
+        if year == '2026' and day == '08' and int(month) < 8:
+            return f"2026-08-{month.zfill(2)}"
+        return f"{year}-{month}-{day}"
+    
+    # 正則匹配 DD/MM/YYYY
+    match_slash = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{4})', s)
+    if match_slash:
+        day, month, year = match_slash.groups()
+        if year == '2026' and day == '08' and int(month) < 8:
+            return f"2026-08-{month.zfill(2)}"
+        return f"{year}-{month.zfill(2)}-{day.zfill(2)}"
+        
+    return s
+
 @st.cache_data(ttl=60)
 def load_data():
     csv_files = glob.glob('data/*.csv')
@@ -74,10 +103,11 @@ def load_data():
         
     df = pd.concat(df_list, ignore_index=True)
     
-    # 關鍵精確日期解析：防止 %Y-%m-%d 被誤判為日月顛倒
-    parsed_date = pd.to_datetime(df['date'], format='%Y-%m-%d', errors='coerce')
-    parsed_date = parsed_date.fillna(pd.to_datetime(df['date'], format='%d/%m/%Y', errors='coerce'))
-    df['date'] = parsed_date.fillna(pd.to_datetime(df['date'], errors='coerce'))
+    # 1. 先執行文字層面的日期月日顛倒修正
+    df['date'] = df['date'].apply(fix_inverted_date)
+    
+    # 2. 轉為 Pandas Datetime
+    df['date'] = pd.to_datetime(df['date'], errors='coerce')
     
     # 欄位補全與清洗
     if 'cat1' not in df.columns:
