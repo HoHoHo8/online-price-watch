@@ -35,7 +35,7 @@ SHOP_MAP = {
 
 def process_scraped_df(df_input, default_date=today_str):
     """
-    清洗數據、格式化日期 (自動智能解析，防止 YYYY-MM-DD 被誤改)
+    清洗數據、格式化日期 (徹底修正月日顛倒誤判問題)
     """
     df = df_input.copy()
     if df.empty:
@@ -69,11 +69,16 @@ def process_scraped_df(df_input, default_date=today_str):
     df.rename(columns=rename_dict, inplace=True)
     df = df.loc[:, ~df.columns.duplicated()]
     
-    # 3. 關鍵修正：採用 format='mixed' 智能解析，不再加 dayfirst
+    # 3. 關鍵精確日期解析：避免 05/08/2026 (8月5日) 被誤判成 5月8日
     if 'date' not in df.columns:
         df['date'] = default_date
     else:
-        df['date'] = pd.to_datetime(df['date'], format='mixed', errors='coerce').dt.strftime('%Y-%m-%d')
+        # 先以 %Y-%m-%d 解析，若失敗再以 %d/%m/%Y (日/月/年) 解析
+        parsed_date = pd.to_datetime(df['date'], format='%Y-%m-%d', errors='coerce')
+        parsed_date = parsed_date.fillna(pd.to_datetime(df['date'], format='%d/%m/%Y', errors='coerce'))
+        parsed_date = parsed_date.fillna(pd.to_datetime(df['date'], errors='coerce'))
+        
+        df['date'] = parsed_date.dt.strftime('%Y-%m-%d')
         df['date'] = df['date'].fillna(default_date)
 
     # 4. 超市代碼轉中文
