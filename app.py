@@ -11,7 +11,7 @@ st.set_page_config(page_title="香港網上超市價格與優惠追蹤系統", l
 # ---------------------------------------------------------
 # 🔒 密碼登入機制設定
 # ---------------------------------------------------------
-APP_PASSWORD = "zakuissmart_168"  # <--- 密碼設定
+APP_PASSWORD = "zakuissmart_168"
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
@@ -52,7 +52,7 @@ st.sidebar.markdown("---")
 st.title("🛒 香港網上超市價格追蹤 & 趨勢分析")
 
 # ---------------------------------------------------------
-# 📊 讀取歷史資料 (唯一且完整的 load_data 函式)
+# 📊 讀取歷史資料 (精確日期解析)
 # ---------------------------------------------------------
 @st.cache_data(ttl=60)
 def load_data():
@@ -74,8 +74,10 @@ def load_data():
         
     df = pd.concat(df_list, ignore_index=True)
     
-    # 關鍵修正：採用 format='mixed' 智能解析，防止 YYYY-MM-DD 被反向硬改
-    df['date'] = pd.to_datetime(df['date'], format='mixed', errors='coerce')
+    # 關鍵精確日期解析：防止 %Y-%m-%d 被誤判為日月顛倒
+    parsed_date = pd.to_datetime(df['date'], format='%Y-%m-%d', errors='coerce')
+    parsed_date = parsed_date.fillna(pd.to_datetime(df['date'], format='%d/%m/%Y', errors='coerce'))
+    df['date'] = parsed_date.fillna(pd.to_datetime(df['date'], errors='coerce'))
     
     # 欄位補全與清洗
     if 'cat1' not in df.columns:
