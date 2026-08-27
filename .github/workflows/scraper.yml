@@ -35,4 +35,9 @@ jobs:
           git config --global user.name 'github-actions[bot]'
           git config --global user.email 'github-actions[bot]@users.noreply.github.com'
           git add data/*.csv
-          git diff --quiet && git diff --staged --quiet || (git commit -m "Auto-update price data [$(date +'%Y-%m-%d')]" && git pull --rebase origin main && git push origin main)
+          if ! git diff --quiet || ! git diff --staged --quiet; then
+            git commit -m "Auto-update price data [$(date +'%Y-%m-%d')]"
+            git fetch origin main
+            git rebase -X theirs origin/main || (git rebase --abort && git reset --soft origin/main && git commit -m "Auto-update price data [$(date +'%Y-%m-%d')]")
+            git push origin main
+          fi
