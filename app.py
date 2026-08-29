@@ -12,7 +12,7 @@ st.set_page_config(page_title="香港網上超市價格與優惠追蹤系統", l
 # ---------------------------------------------------------
 # 🔒 密碼登入機制設定
 # ---------------------------------------------------------
-APP_PASSWORD = "168"
+APP_PASSWORD = "zakuissmart_168"
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
@@ -53,11 +53,11 @@ st.sidebar.markdown("---")
 st.title("🛒 香港網上超市價格追蹤 & 趨勢分析")
 
 # ---------------------------------------------------------
-# 📊 讀取歷史資料 (自動校正 2026-03-08 至 2026-07-08 的倒置日期)
+# 📊 讀取歷史資料 (自動校正日期與超市名稱)
 # ---------------------------------------------------------
 def fix_inverted_date(date_str):
     """
-    強效校正函數：將原本被誤寫為 2026-MM-08 (MM < 08) 的日期，修復回 2026-08-MM
+    將原本被誤寫為 2026-MM-08 (MM < 08) 的日期，修復回 2026-08-MM
     """
     if pd.isna(date_str):
         return date_str
@@ -68,7 +68,6 @@ def fix_inverted_date(date_str):
     match = re.match(r'^(\d{4})-(\d{2})-(\d{2})', s)
     if match:
         year, month, day = match.groups()
-        # 如果年份是 2026，且 day 是 '08'，但 month 是 '01'~'07'，代表月日顛倒了！
         if year == '2026' and day == '08' and int(month) < 8:
             return f"2026-08-{month.zfill(2)}"
         return f"{year}-{month}-{day}"
@@ -103,11 +102,22 @@ def load_data():
         
     df = pd.concat(df_list, ignore_index=True)
     
-    # 1. 先執行文字層面的日期月日顛倒修正
+    # 1. 日期格式校正
     df['date'] = df['date'].apply(fix_inverted_date)
-    
-    # 2. 轉為 Pandas Datetime
     df['date'] = pd.to_datetime(df['date'], errors='coerce')
+    
+    # 2. 🏪 統一超市名稱標準化 (解決消委會大小寫/命名不一問題)
+    supermarket_mapping = {
+        'MARKET PLACE / JASONS': 'Market Place / Jasons',
+        'MARKET PLACE BY JASONS': 'Market Place / Jasons',
+        'Market Place / JASONS': 'Market Place / Jasons',
+        'Market Place by Jasons': 'Market Place / Jasons',
+        'Market Place/Jasons': 'Market Place / Jasons',
+        'Market Place / Jasons': 'Market Place / Jasons'
+    }
+    
+    df['supermarket'] = df['supermarket'].fillna('其他超市').astype(str).str.strip()
+    df['supermarket'] = df['supermarket'].replace(supermarket_mapping)
     
     # 欄位補全與清洗
     if 'cat1' not in df.columns:
@@ -121,7 +131,6 @@ def load_data():
     df['category'] = df['category'].fillna('未分類子類別')
     df['brand'] = df['brand'].fillna('其他品牌')
     df['item_name'] = df['item_name'].fillna('未命名貨品')
-    df['supermarket'] = df['supermarket'].fillna('其他超市')
     df['offers'] = df['offers'].fillna('—').astype(str).str.strip().replace({'': '—', 'nan': '—', 'None': '—'})
     df['price'] = pd.to_numeric(df['price'], errors='coerce')
     
