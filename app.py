@@ -12,7 +12,7 @@ st.set_page_config(page_title="香港網上超市價格與優惠追蹤系統", l
 # ---------------------------------------------------------
 # 🔒 密碼登入機制設定
 # ---------------------------------------------------------
-APP_PASSWORD = "zakuissmart_168"
+APP_PASSWORD = "168"
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
