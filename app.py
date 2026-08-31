@@ -111,8 +111,7 @@ def load_data():
         'MARKET PLACE BY JASONS': 'Market Place / Jasons',
         'Market Place / JASONS': 'Market Place / Jasons',
         'Market Place by Jasons': 'Market Place / Jasons',
-        'Market Place/Jasons': 'Market Place / Jasons',
-        'Market Place / Jasons': 'Market Place / Jasons'
+        'Market Place/Jasons': 'Market Place / Jasons'
     }
     
     df['supermarket'] = df['supermarket'].fillna('其他超市').astype(str).str.strip()
@@ -143,14 +142,24 @@ except Exception as e:
     st.error(f"未搵到歷史數據或格式有誤，請檢查 data/ 資料夾！錯誤訊息: {e}")
     st.stop()
 
+# ---------------------------------------------------------
+# 定義選單名稱常量 (確保選項與 if/elif 完全一致)
+# ---------------------------------------------------------
+MENU_DEAL_FINDER = "🔥 著數與降價掃瞄器 (Deal Finder)"
+MENU_BASKET_CALC = "🛒 購物籃總價比價神器 (Basket Calculator)"
+MENU_CAT_OVERVIEW = "🌐 全庫品類通脹與指數大盤 (Category Overview)"
+MENU_SINGLE_ITEM = "🔍 單一貨品深度追蹤"
+MENU_CAT_COMPARE = "📊 同類別貨品價格比較 (Cat1 / Category)"
+MENU_MACRO_INSIGHTS = "📈 單一品類價格變動與通脹分析 (Macro Insights)"
+
 # 側邊欄：分頁選單
 page = st.sidebar.radio("📌 請選擇分析功能", [
-    "🔥 著數與降價掃瞄器 (Deal Finder)",
-    "🛒 購物籃總價比價神器 (Basket Calculator)",
-    "🌐 全庫品類通脹與指數大盤 (Category Overview)",
-    "🔍 單一貨品深度追蹤", 
-    "📊 同類別貨品價格比較 (Cat1 / Category)",
-    "📈 單一品類價格變動與通脹分析 (Macro Insights)"
+    MENU_DEAL_FINDER,
+    MENU_BASKET_CALC,
+    MENU_CAT_OVERVIEW,
+    MENU_SINGLE_ITEM, 
+    MENU_CAT_COMPARE,
+    MENU_MACRO_INSIGHTS
 ])
 st.sidebar.markdown("---")
 
@@ -158,7 +167,7 @@ st.sidebar.markdown("---")
 # ==========================================
 # ⚡ 頁面 1：🔥 著數與降價掃瞄器 (Deal Finder)
 # ==========================================
-if page == "🔥 著數與降價掃瞄器 (Deal Finder)":
+if page == MENU_DEAL_FINDER:
     st.subheader("🔥 今日跨超市著數與降價掃瞄器")
     st.markdown("自動掃瞄最新數據，為你鎖定**創歷史新低**或**大幅降價**的精選商品！")
 
@@ -240,7 +249,7 @@ if page == "🔥 著數與降價掃瞄器 (Deal Finder)":
 # ==========================================
 # 🛒 頁面 2：🛒 購物籃總價比價神器 (Basket Calculator)
 # ==========================================
-elif page == "🛒 購物籃總價比價神器 (Basket Calculator)":
+elif page == MENU_BASKET_CALC:
     st.subheader("🛒 跨超市購物籃組合格價神器")
     st.markdown("挑選你要購買的日常生活用品，系統自動計算**「去哪一家超市買最省錢」**以及**「分拆購買的最佳組合」**！")
 
@@ -249,7 +258,6 @@ elif page == "🛒 購物籃總價比價神器 (Basket Calculator)":
 
     all_items = sorted(latest_df['item_name'].unique().tolist())
     
-    # 模糊關鍵字搜尋過濾器
     search_kw = st.text_input("🔍 關鍵字快速過濾貨品選單 (例如: 米, 奶粉, 紙巾)", "")
     if search_kw:
         filtered_items = [i for i in all_items if search_kw.lower() in i.lower()]
@@ -263,19 +271,16 @@ elif page == "🛒 購物籃總價比價神器 (Basket Calculator)":
     else:
         basket_df = latest_df[latest_df['item_name'].isin(selected_basket_items)]
 
-        # 透視表：橫軸超市，縱軸貨品
         pivot_basket = basket_df.pivot_table(index='item_name', columns='supermarket', values='price', aggfunc='min')
 
         st.markdown("### 📋 購物籃貨品單價對比表")
         st.dataframe(pivot_basket.style.format("${:.2f}", na_rep="無售賣"), use_container_width=True)
 
-        # 計算各超市總價
         shop_totals = pivot_basket.sum(axis=0)
         
         st.markdown("### 💰 購物籃總價結算比較")
         cols = st.columns(len(shop_totals) + 1)
         
-        # 算最佳分拆購買方案
         best_split_cost = pivot_basket.min(axis=1).sum()
         
         for idx, (shop_name, total_val) in enumerate(shop_totals.items()):
@@ -299,7 +304,7 @@ elif page == "🛒 購物籃總價比價神器 (Basket Calculator)":
 # ==========================================
 # 🌐 頁面 3：全庫品類通脹與指數大盤 (Category Overview)
 # ==========================================
-elif page == "全庫品類通脹與指數大盤 (Category Overview)":
+elif page == MENU_CAT_OVERVIEW:
     st.subheader("🌐 全庫品類整體價格改變與 CPI 物價指數大盤")
     st.markdown("採用**固定購物籃同店價格指數 (Same-basket Price Index)**，排除新上架/下架商品干擾，精確反映品類真實通脹。")
 
@@ -324,7 +329,7 @@ elif page == "全庫品類通脹與指數大盤 (Category Overview)":
         past_latest_date = past_df['date'].max()
         past_avg = past_df[past_df['date'] == past_latest_date].set_index(col_name)['price']
     else:
-        past_avg = pd.Series()
+        past_avg = pd.Series(dtype=float)
 
     overview_list = []
     pct_col_name = f'變動率 ({time_frame.split()[0]})'
@@ -332,7 +337,7 @@ elif page == "全庫品類通脹與指數大盤 (Category Overview)":
     for cat in latest_avg.index:
         curr_p = latest_avg.get(cat)
         past_p = past_avg.get(cat) if cat in past_avg else None
-        pct_change = ((curr_p - past_p) / past_p * 100) if (past_p and past_p > 0) else None
+        pct_change = ((curr_p - past_p) / past_p * 100) if (past_p is not None and past_p > 0) else None
         
         overview_list.append({
             '品類名稱': cat,
@@ -344,7 +349,7 @@ elif page == "全庫品類通脹與指數大盤 (Category Overview)":
     overview_df = pd.DataFrame(overview_list).dropna(subset=[pct_col_name])
 
     if overview_df.empty:
-        st.warning(f"⚠️ 歷史數據不足以計算 {time_frame} 變動！")
+        st.warning(f"⚠️ 歷史數據不足以計算 {time_frame} 變動（目標對比日期：{target_date.strftime('%Y-%m-%d')}）！")
     else:
         top_gainer = overview_df.sort_values(by=pct_col_name, ascending=False).iloc[0]
         top_loser = overview_df.sort_values(by=pct_col_name, ascending=True).iloc[0]
@@ -383,10 +388,9 @@ elif page == "全庫品類通脹與指數大盤 (Category Overview)":
 # ==========================================
 # 🔍 頁面 4：單一貨品深度追蹤
 # ==========================================
-elif page == "單一貨品深度追蹤":
+elif page == MENU_SINGLE_ITEM:
     st.sidebar.header("🔍 篩選條件")
     
-    # 模糊搜尋框
     search_keyword = st.sidebar.text_input("🔍 關鍵字快速搜尋貨品名稱", "")
 
     categories = sorted(df['category'].dropna().unique().tolist())
@@ -400,7 +404,8 @@ elif page == "單一貨品深度追蹤":
     brands = sorted(df_filtered['brand'].dropna().unique().tolist())
     selected_brands = st.sidebar.multiselect("2. 選擇品牌 (可多選)", options=brands, default=brands)
 
-    df_filtered = df_filtered[df_filtered['brand'].isin(selected_brands)] if selected_brands else df_filtered
+    if selected_brands:
+        df_filtered = df_filtered[df_filtered['brand'].isin(selected_brands)]
 
     only_offers = st.sidebar.checkbox("🏷️ 僅顯示含有特別優惠/促銷的商品")
     if only_offers:
@@ -409,68 +414,70 @@ elif page == "單一貨品深度追蹤":
     items = sorted(df_filtered['item_name'].dropna().unique().tolist())
 
     if not items:
-        st.warning("⚠️ 找不到符合條件的貨品！")
-        st.stop()
+        st.warning("⚠️ 找不到符合篩選條件的貨品！請嘗試放寬側邊欄的搜尋或選擇條件。")
+    else:
+        selected_item = st.sidebar.selectbox("3. 選擇貨品", options=items)
+        item_df = df_filtered[df_filtered['item_name'] == selected_item]
 
-    selected_item = st.sidebar.selectbox("3. 選擇貨品", options=items)
-    item_df = df_filtered[df_filtered['item_name'] == selected_item]
+        def calculate_metrics(data):
+            if data.empty:
+                return pd.DataFrame()
+            latest_date = data['date'].max()
+            metrics = []
+            for shop in data['supermarket'].unique():
+                shop_data = data[data['supermarket'] == shop].sort_values('date')
+                if shop_data.empty:
+                    continue
+                latest_row = shop_data.iloc[-1]
+                curr_price = latest_row['price']
+                curr_offer = latest_row.get('offers', '—')
+                
+                def get_past_price(days):
+                    target_date = latest_date - timedelta(days=days)
+                    past_data = shop_data[shop_data['date'] <= target_date]
+                    return past_data.iloc[-1]['price'] if not past_data.empty else None
 
-    def calculate_metrics(data):
-        if data.empty:
-            return pd.DataFrame()
-        latest_date = data['date'].max()
-        metrics = []
-        for shop in data['supermarket'].unique():
-            shop_data = data[data['supermarket'] == shop].sort_values('date')
-            if shop_data.empty:
-                continue
-            latest_row = shop_data.iloc[-1]
-            curr_price = latest_row['price']
-            curr_offer = latest_row.get('offers', '—')
-            
-            def get_past_price(days):
-                target_date = latest_date - timedelta(days=days)
-                past_data = shop_data[shop_data['date'] <= target_date]
-                return past_data.iloc[-1]['price'] if not past_data.empty else None
+                dod = ((curr_price - get_past_price(1)) / get_past_price(1) * 100) if get_past_price(1) else None
+                wow = ((curr_price - get_past_price(7)) / get_past_price(7) * 100) if get_past_price(7) else None
+                mom = ((curr_price - get_past_price(30)) / get_past_price(30) * 100) if get_past_price(30) else None
+                yoy = ((curr_price - get_past_price(365)) / get_past_price(365) * 100) if get_past_price(365) else None
+                
+                metrics.append({
+                    '超市': shop,
+                    '最新售價 ($)': f"${curr_price:.2f}",
+                    '特別優惠': curr_offer,
+                    'DoD (按日)': f"{dod:+.2f}%" if dod is not None else "N/A",
+                    'WoW (按周)': f"{wow:+.2f}%" if wow is not None else "N/A",
+                    'MoM (按月)': f"{mom:+.2f}%" if mom is not None else "N/A",
+                    'YoY (按年)': f"{yoy:+.2f}%" if yoy is not None else "N/A"
+                })
+            return pd.DataFrame(metrics)
 
-            dod = ((curr_price - get_past_price(1)) / get_past_price(1) * 100) if get_past_price(1) else None
-            wow = ((curr_price - get_past_price(7)) / get_past_price(7) * 100) if get_past_price(7) else None
-            mom = ((curr_price - get_past_price(30)) / get_past_price(30) * 100) if get_past_price(30) else None
-            yoy = ((curr_price - get_past_price(365)) / get_past_price(365) * 100) if get_past_price(365) else None
-            
-            metrics.append({
-                '超市': shop,
-                '最新售價 ($)': f"${curr_price:.2f}",
-                '特別優惠': curr_offer,
-                'DoD (按日)': f"{dod:+.2f}%" if dod is not None else "N/A",
-                'WoW (按周)': f"{wow:+.2f}%" if wow is not None else "N/A",
-                'MoM (按月)': f"{mom:+.2f}%" if mom is not None else "N/A",
-                'YoY (按年)': f"{yoy:+.2f}%" if yoy is not None else "N/A"
-            })
-        return pd.DataFrame(metrics)
+        if not item_df.empty:
+            item_latest_date_str = item_df['date'].max().strftime('%Y-%m-%d')
+            st.subheader(f"📌 {selected_item} - 現價、優惠及歷史變動 (截至 {item_latest_date_str})")
 
-    if not item_df.empty:
-        item_latest_date_str = item_df['date'].max().strftime('%Y-%m-%d')
-        st.subheader(f"📌 {selected_item} - 現價、優惠及歷史變動 (截至 {item_latest_date_str})")
+            metrics_df = calculate_metrics(item_df)
+            if not metrics_df.empty:
+                st.dataframe(metrics_df, use_container_width=True, hide_index=True)
+            else:
+                st.info("暫無此貨品的超市價格指標。")
 
-        metrics_df = calculate_metrics(item_df)
-        st.dataframe(metrics_df, use_container_width=True, hide_index=True)
-
-        st.subheader("📈 歷史價格走勢圖")
-        fig = px.line(
-            item_df, x='date', y='price', color='supermarket',
-            title=f"{selected_item} 在各大超市的價格走勢",
-            labels={'date': '日期', 'price': '價格 (HKD)', 'supermarket': '超市'},
-            markers=True
-        )
-        fig.update_layout(hovermode="x unified")
-        st.plotly_chart(fig, use_container_width=True)
+            st.subheader("📈 歷史價格走勢圖")
+            fig = px.line(
+                item_df, x='date', y='price', color='supermarket',
+                title=f"{selected_item} 在各大超市的價格走勢",
+                labels={'date': '日期', 'price': '價格 (HKD)', 'supermarket': '超市'},
+                markers=True
+            )
+            fig.update_layout(hovermode="x unified")
+            st.plotly_chart(fig, use_container_width=True)
 
 
 # ==========================================
 # 📊 頁面 5：同類別貨品價格比較 (Cat1 / Category)
 # ==========================================
-elif page == "📊 同類別貨品價格比較 (Cat1 / Category)":
+elif page == MENU_CAT_COMPARE:
     st.sidebar.header("📊 類別比較條件")
     cat1_list = sorted(df['cat1'].dropna().unique().tolist())
     selected_cat1 = st.sidebar.selectbox("1. 選擇主類別 (Cat1)", options=cat1_list)
@@ -495,7 +502,7 @@ elif page == "📊 同類別貨品價格比較 (Cat1 / Category)":
 # ==========================================
 # 📈 頁面 6：單一品類價格變動與通脹分析 (Macro Insights)
 # ==========================================
-elif page == "📈 單一品類價格變動與通脹分析 (Macro Insights)":
+elif page == MENU_MACRO_INSIGHTS:
     st.sidebar.header("📉 品類宏觀分析條件")
     cat1_list = sorted(df['cat1'].dropna().unique().tolist())
     selected_cat1 = st.sidebar.selectbox("選擇分析主類別 (Cat1)", options=cat1_list)
