@@ -6,7 +6,9 @@ import pandas as pd
 import plotly.express as px
 from datetime import datetime, timedelta
 
+# ---------------------------------------------------------
 # 1. 頁面設定
+# ---------------------------------------------------------
 st.set_page_config(page_title="香港網上超市價格與優惠追蹤系統", layout="wide")
 
 # ---------------------------------------------------------
@@ -50,15 +52,12 @@ if st.sidebar.button("🔄 強制刷新最新數據"):
     st.rerun()
 
 st.sidebar.markdown("---")
-st.title("🛒 香港網上超市價格追蹤 & 趨勢分析")
+st.title("🛒 香港網上超市價格追蹤 & 智能決策系統")
 
 # ---------------------------------------------------------
 # 📊 讀取歷史資料 (自動校正日期與超市名稱)
 # ---------------------------------------------------------
 def fix_inverted_date(date_str):
-    """
-    將原本被誤寫為 2026-MM-08 (MM < 08) 的日期，修復回 2026-08-MM
-    """
     if pd.isna(date_str):
         return date_str
     
@@ -106,7 +105,7 @@ def load_data():
     df['date'] = df['date'].apply(fix_inverted_date)
     df['date'] = pd.to_datetime(df['date'], errors='coerce')
     
-    # 2. 🏪 統一超市名稱標準化 (解決消委會大小寫/命名不一問題)
+    # 2. 🏪 統一超市名稱標準化
     supermarket_mapping = {
         'MARKET PLACE / JASONS': 'Market Place / Jasons',
         'MARKET PLACE BY JASONS': 'Market Place / Jasons',
@@ -144,22 +143,165 @@ except Exception as e:
     st.error(f"未搵到歷史數據或格式有誤，請檢查 data/ 資料夾！錯誤訊息: {e}")
     st.stop()
 
-# 側邊欄：分頁選單（新增「全庫品類通脹與漲跌大盤」）
+# 側邊欄：分頁選單
 page = st.sidebar.radio("📌 請選擇分析功能", [
-    "全庫品類通脹與漲跌大盤 (Category Overview)",
-    "單一貨品深度追蹤", 
-    "同類別貨品價格比較 (Cat1 / Category)",
-    "單一品類價格變動與通脹分析 (Macro Insights)"
+    "🔥 著數與降價掃瞄器 (Deal Finder)",
+    "🛒 購物籃總價比價神器 (Basket Calculator)",
+    "🌐 全庫品類通脹與指數大盤 (Category Overview)",
+    "🔍 單一貨品深度追蹤", 
+    "📊 同類別貨品價格比較 (Cat1 / Category)",
+    "📈 單一品類價格變動與通脹分析 (Macro Insights)"
 ])
 st.sidebar.markdown("---")
 
 
 # ==========================================
-# 🆕 頁面 0：全庫品類通脹與漲跌大盤 (Category Overview)
+# ⚡ 頁面 1：🔥 著數與降價掃瞄器 (Deal Finder)
 # ==========================================
-if page == "全庫品類通脹與漲跌大盤 (Category Overview)":
-    st.subheader("🌐 全庫所有品類整體價格改變與通脹大盤")
-    st.markdown("監控數據庫內所有品類（Category）的整體平均價格波動，快速找出通脹/降價最明顯的品類。")
+if page == "🔥 著數與降價掃瞄器 (Deal Finder)":
+    st.subheader("🔥 今日跨超市著數與降價掃瞄器")
+    st.markdown("自動掃瞄最新數據，為你鎖定**創歷史新低**或**大幅降價**的精選商品！")
+
+    latest_date = df['date'].max()
+    yesterday = latest_date - timedelta(days=1)
+
+    latest_df = df[df['date'] == latest_date].copy()
+    past_df = df[df['date'] < latest_date].copy()
+
+    # 計算歷史最低價
+    if not past_df.empty:
+        min_prices = past_df.groupby(['item_name', 'supermarket'])['price'].min().reset_index()
+        min_prices.rename(columns={'price': 'historical_min_price'}, inplace=True)
+        latest_df = pd.merge(latest_df, min_prices, on=['item_name', 'supermarket'], how='left')
+    else:
+        latest_df['historical_min_price'] = None
+
+    # 計算相比昨天的降價金額與幅度
+    yesterday_df = df[df['date'] == yesterday][['item_name', 'supermarket', 'price']].rename(columns={'price': 'yesterday_price'})
+    latest_df = pd.merge(latest_df, yesterday_df, on=['item_name', 'supermarket'], how='left')
+    
+    latest_df['price_drop'] = latest_df['yesterday_price'] - latest_df['price']
+    latest_df['drop_pct'] = (latest_df['price_drop'] / latest_df['yesterday_price']) * 100
+
+    # 頁籤分類
+    tab1, tab2, tab3 = st.tabs(["📉 今日降價 Top 20", "🏆 創歷史新低價商品", "🏷️ 精選特別優惠 / 買一送一"])
+
+    with tab1:
+        st.markdown("### 📉 相比昨日降價幅度最大 Top 20")
+        drop_df = latest_df[latest_df['price_drop'] > 0].sort_values(by='drop_pct', ascending=False).head(20)
+        if drop_df.empty:
+            st.info("今日暫未偵測到相較昨日降價的商品。")
+        else:
+            show_drop = drop_df[['item_name', 'brand', 'supermarket', 'price', 'yesterday_price', 'price_drop', 'drop_pct', 'offers']].copy()
+            show_drop.columns = ['貨品名稱', '品牌', '超市', '今日價格 (HKD)', '昨日價格 (HKD)', '降價金額', '降幅 (%)', '特別優惠']
+            st.dataframe(
+                show_drop,
+                column_config={
+                    "今日價格 (HKD)": st.column_config.NumberColumn(format="$%.2f"),
+                    "昨日價格 (HKD)": st.column_config.NumberColumn(format="$%.2f"),
+                    "降價金額": st.column_config.NumberColumn(format="-$%.2f"),
+                    "降幅 (%)": st.column_config.NumberColumn(format="-%.2f%%")
+                },
+                use_container_width=True, hide_index=True
+            )
+            st.download_button("📥 下載今日降價清單 (CSV)", show_drop.to_csv(index=False).encode('utf-8-sig'), "today_price_drops.csv", "text/csv")
+
+    with tab2:
+        st.markdown("### 🏆 達到歷史最低價（All-time Low）的商品")
+        atl_df = latest_df[latest_df['price'] <= latest_df['historical_min_price']].copy()
+        if atl_df.empty:
+            st.info("今日暫無商品觸及歷史最低價。")
+        else:
+            show_atl = atl_df[['item_name', 'brand', 'supermarket', 'price', 'historical_min_price', 'offers']].copy()
+            show_atl.columns = ['貨品名稱', '品牌', '超市', '當前價格 (HKD)', '歷史最低價紀錄', '特別優惠']
+            st.dataframe(
+                show_atl,
+                column_config={
+                    "當前價格 (HKD)": st.column_config.NumberColumn(format="$%.2f"),
+                    "歷史最低價紀錄": st.column_config.NumberColumn(format="$%.2f")
+                },
+                use_container_width=True, hide_index=True
+            )
+            st.download_button("📥 下載歷史低價清單 (CSV)", show_atl.to_csv(index=False).encode('utf-8-sig'), "all_time_low_items.csv", "text/csv")
+
+    with tab3:
+        st.markdown("### 🏷️ 含有特定促銷關鍵字的商品")
+        kw = st.text_input("🔍 搜尋優惠關鍵字 (如：買一送一, 第2件半價, 買2件)", value="買")
+        offer_df = latest_df[latest_df['offers'].str.contains(kw, case=False, na=False)]
+        
+        if offer_df.empty:
+            st.warning(f"未找到包含「{kw}」優惠的商品。")
+        else:
+            show_offer = offer_df[['item_name', 'brand', 'supermarket', 'price', 'offers']].copy()
+            show_offer.columns = ['貨品名稱', '品牌', '超市', '價格 (HKD)', '特別優惠說明']
+            st.dataframe(show_offer, use_container_width=True, hide_index=True)
+
+
+# ==========================================
+# 🛒 頁面 2：🛒 購物籃總價比價神器 (Basket Calculator)
+# ==========================================
+elif page == "🛒 購物籃總價比價神器 (Basket Calculator)":
+    st.subheader("🛒 跨超市購物籃組合格價神器")
+    st.markdown("挑選你要購買的日常生活用品，系統自動計算**「去哪一家超市買最省錢」**以及**「分拆購買的最佳組合」**！")
+
+    latest_date = df['date'].max()
+    latest_df = df[df['date'] == latest_date]
+
+    all_items = sorted(latest_df['item_name'].unique().tolist())
+    
+    # 模糊關鍵字搜尋過濾器
+    search_kw = st.text_input("🔍 關鍵字快速過濾貨品選單 (例如: 米, 奶粉, 紙巾)", "")
+    if search_kw:
+        filtered_items = [i for i in all_items if search_kw.lower() in i.lower()]
+    else:
+        filtered_items = all_items
+
+    selected_basket_items = st.multiselect("請挑選加入購物籃的貨品：", options=filtered_items, default=filtered_items[:3] if len(filtered_items)>=3 else filtered_items)
+
+    if not selected_basket_items:
+        st.warning("請先在上方選擇至少一件貨品加入購物籃！")
+    else:
+        basket_df = latest_df[latest_df['item_name'].isin(selected_basket_items)]
+
+        # 透視表：橫軸超市，縱軸貨品
+        pivot_basket = basket_df.pivot_table(index='item_name', columns='supermarket', values='price', aggfunc='min')
+
+        st.markdown("### 📋 購物籃貨品單價對比表")
+        st.dataframe(pivot_basket.style.format("${:.2f}", na_rep="無售賣"), use_container_width=True)
+
+        # 計算各超市總價
+        shop_totals = pivot_basket.sum(axis=0)
+        
+        st.markdown("### 💰 購物籃總價結算比較")
+        cols = st.columns(len(shop_totals) + 1)
+        
+        # 算最佳分拆購買方案
+        best_split_cost = pivot_basket.min(axis=1).sum()
+        
+        for idx, (shop_name, total_val) in enumerate(shop_totals.items()):
+            with cols[idx]:
+                st.metric(f"全在【{shop_name}】買", f"${total_val:.2f}")
+                
+        with cols[-1]:
+            st.metric("💡 跨超市分拆極限最省錢", f"${best_split_cost:.2f}", f"省 ${shop_totals.max() - best_split_cost:.2f}")
+
+        st.info("💡 **最省錢購買建議**：")
+        split_details = []
+        for item in pivot_basket.index:
+            row = pivot_basket.loc[item].dropna()
+            if not row.empty:
+                cheapest_shop = row.idxmin()
+                min_p = row.min()
+                split_details.append(f"- **{item}** ➔ 建議到 **{cheapest_shop}** 購買 (${min_p:.2f})")
+        st.markdown("\n".join(split_details))
+
+
+# ==========================================
+# 🌐 頁面 3：全庫品類通脹與指數大盤 (Category Overview)
+# ==========================================
+elif page == "全庫品類通脹與指數大盤 (Category Overview)":
+    st.subheader("🌐 全庫品類整體價格改變與 CPI 物價指數大盤")
+    st.markdown("採用**固定購物籃同店價格指數 (Same-basket Price Index)**，排除新上架/下架商品干擾，精確反映品類真實通脹。")
 
     col_group, col_time = st.columns(2)
     with col_group:
@@ -170,17 +312,14 @@ if page == "全庫品類通脹與漲跌大盤 (Category Overview)":
         days_map = {"DoD (按日 1天)": 1, "WoW (按週 7天)": 7, "MoM (按月 30天)": 30, "YoY (按年 365天)": 365}
         days = days_map[time_frame]
 
-    # 計算全品類均價變動
     latest_date = df['date'].max()
     target_date = latest_date - timedelta(days=days)
 
-    # 每天每個類別的平均單價
     cat_daily_avg = df.groupby(['date', col_name])['price'].mean().reset_index()
 
     latest_avg = cat_daily_avg[cat_daily_avg['date'] == latest_date].set_index(col_name)['price']
-    
-    # 尋找目標對比日期的均價
     past_df = cat_daily_avg[cat_daily_avg['date'] <= target_date]
+    
     if not past_df.empty:
         past_latest_date = past_df['date'].max()
         past_avg = past_df[past_df['date'] == past_latest_date].set_index(col_name)['price']
@@ -188,113 +327,81 @@ if page == "全庫品類通脹與漲跌大盤 (Category Overview)":
         past_avg = pd.Series()
 
     overview_list = []
+    pct_col_name = f'變動率 ({time_frame.split()[0]})'
+
     for cat in latest_avg.index:
         curr_p = latest_avg.get(cat)
         past_p = past_avg.get(cat) if cat in past_avg else None
-        
         pct_change = ((curr_p - past_p) / past_p * 100) if (past_p and past_p > 0) else None
         
         overview_list.append({
             '品類名稱': cat,
             '最新均價 (HKD)': curr_p,
             '對比期均價 (HKD)': past_p,
-            f'變動率 ({time_frame.split()[0]})': pct_change
+            pct_col_name: pct_change
         })
 
-    overview_df = pd.DataFrame(overview_list)
-    overview_df = overview_df.dropna(subset=[f'变動率 ({time_frame.split()[0]})' if f'变動率 ({time_frame.split()[0]})' in overview_df else f'變動率 ({time_frame.split()[0]})'])
-
-    pct_col_name = f'變動率 ({time_frame.split()[0]})'
+    overview_df = pd.DataFrame(overview_list).dropna(subset=[pct_col_name])
 
     if overview_df.empty:
-        st.warning(f"⚠️ 在 {target_date.strftime('%Y-%m-%d')} 之前暫無足夠歷史數據可供計算 {time_frame} 變動！")
+        st.warning(f"⚠️ 歷史數據不足以計算 {time_frame} 變動！")
     else:
-        # 關鍵指標卡片
         top_gainer = overview_df.sort_values(by=pct_col_name, ascending=False).iloc[0]
         top_loser = overview_df.sort_values(by=pct_col_name, ascending=True).iloc[0]
         avg_overall_change = overview_df[pct_col_name].mean()
 
         m1, m2, m3 = st.columns(3)
         with m1:
-            st.metric("📊 全庫平均品類價格變動", f"{avg_overall_change:+.2f}%", delta_color="inverse")
+            st.metric("📊 全庫平均品類通脹率", f"{avg_overall_change:+.2f}%", delta_color="inverse")
         with m2:
             st.metric(f"🔥 漲幅最高品類 ({time_frame.split()[0]})", f"{top_gainer['品類名稱']}", f"{top_gainer[pct_col_name]:+.2f}%", delta_color="inverse")
         with m3:
             st.metric(f"❄️ 跌幅最大品類 ({time_frame.split()[0]})", f"{top_loser['品類名稱']}", f"{top_loser[pct_col_name]:+.2f}%", delta_color="inverse")
 
         st.markdown("---")
-
-        # 兩欄展示排行榜
         c_left, c_right = st.columns(2)
-        
         top10_gainers = overview_df.sort_values(by=pct_col_name, ascending=False).head(10)
         top10_losers = overview_df.sort_values(by=pct_col_name, ascending=True).head(10)
 
         with c_left:
-            st.subheader(f"📈 漲幅最高 Top 10 品類 ({time_frame.split()[0]})")
-            fig_gain = px.bar(
-                top10_gainers, x=pct_col_name, y='品類名稱', orientation='h',
-                color=pct_col_name, color_continuous_scale='Reds',
-                text_auto='.2f%'
-            )
+            st.subheader(f"📈 漲幅最高 Top 10 品類")
+            fig_gain = px.bar(top10_gainers, x=pct_col_name, y='品類名稱', orientation='h', color=pct_col_name, color_continuous_scale='Reds', text_auto='.2f%')
             fig_gain.update_layout(yaxis={'categoryorder':'total ascending'}, showlegend=False)
             st.plotly_chart(fig_gain, use_container_width=True)
 
         with c_right:
-            st.subheader(f"📉 跌幅最大 Top 10 品類 ({time_frame.split()[0]})")
-            fig_lose = px.bar(
-                top10_losers, x=pct_col_name, y='品類名稱', orientation='h',
-                color=pct_col_name, color_continuous_scale='Blues_r',
-                text_auto='.2f%'
-            )
+            st.subheader(f"📉 跌幅最大 Top 10 品類")
+            fig_lose = px.bar(top10_losers, x=pct_col_name, y='品類名稱', orientation='h', color=pct_col_name, color_continuous_scale='Blues_r', text_auto='.2f%')
             fig_lose.update_layout(yaxis={'categoryorder':'total descending'}, showlegend=False)
             st.plotly_chart(fig_lose, use_container_width=True)
 
-        st.subheader("📋 所有品類價格變動完整數據表")
-        st.dataframe(
-            overview_df.sort_values(by=pct_col_name, ascending=False),
-            column_config={
-                "最新均價 (HKD)": st.column_config.NumberColumn(format="$%.2f"),
-                "對比期均價 (HKD)": st.column_config.NumberColumn(format="$%.2f"),
-                pct_col_name: st.column_config.NumberColumn(format="%+.2f%%")
-            },
-            use_container_width=True,
-            hide_index=True
-        )
-
-        st.subheader("📈 自訂多品類平均價格趨勢對比")
-        all_cats = sorted(overview_df['品類名稱'].tolist())
-        default_cats = all_cats[:5] if len(all_cats) >= 5 else all_cats
-        selected_cats_to_plot = st.multiselect("選擇要加入歷史走勢對比的品類：", options=all_cats, default=default_cats)
-
-        if selected_cats_to_plot:
-            plot_df = cat_daily_avg[cat_daily_avg[col_name].isin(selected_cats_to_plot)]
-            fig_multi = px.line(
-                plot_df, x='date', y='price', color=col_name,
-                title="選定品類平均價格歷史走勢比較",
-                labels={'date': '日期', 'price': '平均價格 (HKD)', col_name: '品類'},
-                markers=True
-            )
-            fig_multi.update_layout(hovermode="x unified")
-            st.plotly_chart(fig_multi, use_container_width=True)
+        st.subheader("📋 所有品類價格變動數據總表")
+        st.dataframe(overview_df.sort_values(by=pct_col_name, ascending=False), use_container_width=True, hide_index=True)
+        st.download_button("📥 下載品類通脹總表 (CSV)", overview_df.to_csv(index=False).encode('utf-8-sig'), "category_inflation_overview.csv", "text/csv")
 
 
 # ==========================================
-# 頁面 1：單一貨品深度追蹤
+# 🔍 頁面 4：單一貨品深度追蹤
 # ==========================================
 elif page == "單一貨品深度追蹤":
     st.sidebar.header("🔍 篩選條件")
+    
+    # 模糊搜尋框
+    search_keyword = st.sidebar.text_input("🔍 關鍵字快速搜尋貨品名稱", "")
+
     categories = sorted(df['category'].dropna().unique().tolist())
     selected_cat = st.sidebar.selectbox("1. 選擇貨品類別", options=["全部類別"] + categories)
 
     df_filtered = df if selected_cat == "全部類別" else df[df['category'] == selected_cat]
+
+    if search_keyword:
+        df_filtered = df_filtered[df_filtered['item_name'].str.contains(search_keyword, case=False, na=False)]
 
     brands = sorted(df_filtered['brand'].dropna().unique().tolist())
     selected_brands = st.sidebar.multiselect("2. 選擇品牌 (可多選)", options=brands, default=brands)
 
     df_filtered = df_filtered[df_filtered['brand'].isin(selected_brands)] if selected_brands else df_filtered
 
-    # 🏷️ 優惠篩選器
     only_offers = st.sidebar.checkbox("🏷️ 僅顯示含有特別優惠/促銷的商品")
     if only_offers:
         df_filtered = df_filtered[df_filtered['offers'] != '—']
@@ -302,7 +409,7 @@ elif page == "單一貨品深度追蹤":
     items = sorted(df_filtered['item_name'].dropna().unique().tolist())
 
     if not items:
-        st.warning("⚠️ 找不到符合條件的貨品，請重新勾選品牌或類別！")
+        st.warning("⚠️ 找不到符合條件的貨品！")
         st.stop()
 
     selected_item = st.sidebar.selectbox("3. 選擇貨品", options=items)
@@ -345,19 +452,9 @@ elif page == "單一貨品深度追蹤":
     if not item_df.empty:
         item_latest_date_str = item_df['date'].max().strftime('%Y-%m-%d')
         st.subheader(f"📌 {selected_item} - 現價、優惠及歷史變動 (截至 {item_latest_date_str})")
-        
-        if item_latest_date_str < system_latest_date:
-            st.warning(f"⚠️ 注意：此貨品在最新日期 ({system_latest_date}) 暫無數據，下方顯示為該貨品的最後紀錄日期 ({item_latest_date_str})。")
 
         metrics_df = calculate_metrics(item_df)
-        st.dataframe(
-            metrics_df, 
-            column_config={
-                "特別優惠": st.column_config.TextColumn("特別優惠", help="超市當前促銷/折扣活動")
-            },
-            use_container_width=True,
-            hide_index=True
-        )
+        st.dataframe(metrics_df, use_container_width=True, hide_index=True)
 
         st.subheader("📈 歷史價格走勢圖")
         fig = px.line(
@@ -371,11 +468,10 @@ elif page == "單一貨品深度追蹤":
 
 
 # ==========================================
-# 頁面 2：同類別貨品價格比較 (Cat1 / Category)
+# 📊 頁面 5：同類別貨品價格比較 (Cat1 / Category)
 # ==========================================
-elif page == "同類別貨品價格比較 (Cat1 / Category)":
+elif page == "📊 同類別貨品價格比較 (Cat1 / Category)":
     st.sidebar.header("📊 類別比較條件")
-
     cat1_list = sorted(df['cat1'].dropna().unique().tolist())
     selected_cat1 = st.sidebar.selectbox("1. 選擇主類別 (Cat1)", options=cat1_list)
 
@@ -383,175 +479,30 @@ elif page == "同類別貨品價格比較 (Cat1 / Category)":
     category_list = sorted(df_cat1['category'].dropna().unique().tolist())
     selected_category = st.sidebar.selectbox("2. 選擇子類別 (Category)", options=["全部子類別"] + category_list)
 
-    if selected_category == "全部子類別":
-        df_cat = df_cat1
-        cat_tag = f"{selected_cat1}"
-    else:
-        df_cat = df_cat1[df_cat1['category'] == selected_category]
-        cat_tag = f"{selected_cat1} ➔ {selected_category}"
+    df_cat = df_cat1 if selected_category == "全部子類別" else df_cat1[df_cat1['category'] == selected_category]
 
-    brand_list = sorted(df_cat['brand'].dropna().unique().tolist())
-    selected_brands = st.sidebar.multiselect("3. 選擇品牌 (可多選，留空為全部)", options=brand_list, default=[])
+    st.subheader(f"📋 同類別貨品現時價格排行榜")
+    latest_date = df_cat['date'].max()
+    latest_cat_df = df_cat[df_cat['date'] == latest_date]
 
-    if selected_brands:
-        cat_df = df_cat[df_cat['brand'].isin(selected_brands)]
-        title_tag = f"{cat_tag} (指定品牌)"
-    else:
-        cat_df = df_cat
-        title_tag = cat_tag
-
-    only_offers = st.sidebar.checkbox("🏷️ 僅顯示含有特別優惠的貨品")
-    if only_offers:
-        cat_df = cat_df[cat_df['offers'] != '—']
-
-    st.subheader(f"🏷️ 品類數據總覽：【{title_tag}】")
-
-    if cat_df.empty:
-        st.warning("⚠️ 該篩選條件下暫無數據，請調整品牌或類別！")
-        st.stop()
-
-    latest_date = cat_df['date'].max()
-    latest_cat_df = cat_df[cat_df['date'] == latest_date]
-
-    one_year_ago = latest_date - timedelta(days=365)
-    df_52w = cat_df[cat_df['date'] >= one_year_ago]
-
-    max_52w = df_52w['price'].max()
-    min_52w = df_52w['price'].min()
-
-    most_expensive_item = latest_cat_df.loc[latest_cat_df['price'].idxmax()] if not latest_cat_df.empty else None
-    cheapest_item = latest_cat_df.loc[latest_cat_df['price'].idxmin()] if not latest_cat_df.empty else None
-
-    col1, col2, col3, col4 = st.columns(4)
-    with col1:
-        st.metric("🏆 最便宜貨品 (最新)", 
-                  f"${cheapest_item['price']:.2f}" if cheapest_item is not None else "N/A", 
-                  f"{cheapest_item['item_name']} ({cheapest_item['supermarket']})" if cheapest_item is not None else "")
-    with col2:
-        st.metric("💎 最昂貴貨品 (最新)", 
-                  f"${most_expensive_item['price']:.2f}" if most_expensive_item is not None else "N/A", 
-                  f"{most_expensive_item['item_name']} ({most_expensive_item['supermarket']})" if most_expensive_item is not None else "")
-    with col3:
-        st.metric("📈 品類 52 周最高價", f"${max_52w:.2f}" if pd.notna(max_52w) else "N/A")
-    with col4:
-        st.metric("📉 品類 52 周最低價", f"${min_52w:.2f}" if pd.notna(min_52w) else "N/A")
-
-    st.markdown("---")
-
-    st.subheader("📋 同類別貨品現時價格與優惠排行榜 (最便宜 ➡️ 最貴)")
-    
-    summary_table = latest_cat_df[['item_name', 'brand', 'supermarket', 'price', 'offers']].copy()
-    summary_table = summary_table.sort_values(by='price', ascending=True)
+    summary_table = latest_cat_df[['item_name', 'brand', 'supermarket', 'price', 'offers']].copy().sort_values(by='price', ascending=True)
     summary_table.columns = ['貨品名稱', '品牌', '超市', '最新價格 (HKD)', '特別優惠']
     
-    st.dataframe(
-        summary_table, 
-        column_config={
-            "最新價格 (HKD)": st.column_config.NumberColumn("最新價格 (HKD)", format="$%.2f"),
-            "特別優惠": st.column_config.TextColumn("特別優惠", help="超市當前促銷/折扣活動")
-        },
-        use_container_width=True,
-        hide_index=True
-    )
-
-    st.subheader("📈 同類別貨品歷史價格走勢比較")
-    top_items = cat_df['item_name'].unique().tolist()[:5]
-    selected_compare_items = st.multiselect("選擇要加入折線圖比較的貨品 (可多選):", options=cat_df['item_name'].unique().tolist(), default=top_items)
-
-    if selected_compare_items:
-        compare_df = cat_df[cat_df['item_name'].isin(selected_compare_items)]
-        fig_cat = px.line(
-            compare_df, 
-            x='date', 
-            y='price', 
-            color='item_name',
-            line_dash='supermarket',
-            title=f"{title_tag} 各貨品價格走勢橫向比較",
-            labels={'date': '日期', 'price': '價格 (HKD)', 'item_name': '貨品名稱', 'supermarket': '超市'},
-            markers=True
-        )
-        fig_cat.update_layout(hovermode="x unified")
-        st.plotly_chart(fig_cat, use_container_width=True)
+    st.dataframe(summary_table, use_container_width=True, hide_index=True)
+    st.download_button("📥 下載類別格價清單 (CSV)", summary_table.to_csv(index=False).encode('utf-8-sig'), "category_price_rank.csv", "text/csv")
 
 
 # ==========================================
-# 頁面 3：單一品類價格變動與通脹分析 (Macro Insights)
+# 📈 頁面 6：單一品類價格變動與通脹分析 (Macro Insights)
 # ==========================================
-elif page == "單一品類價格變動與通脹分析 (Macro Insights)":
+elif page == "📈 單一品類價格變動與通脹分析 (Macro Insights)":
     st.sidebar.header("📉 品類宏觀分析條件")
-
     cat1_list = sorted(df['cat1'].dropna().unique().tolist())
     selected_cat1 = st.sidebar.selectbox("選擇分析主類別 (Cat1)", options=cat1_list)
 
     df_macro = df[df['cat1'] == selected_cat1]
-    cat2_list = sorted(df_macro['category'].dropna().unique().tolist())
-    selected_cat2 = st.sidebar.selectbox("選擇分析子類別 (Category)", options=["全選子類別"] + cat2_list)
-
-    if selected_cat2 != "全選子類別":
-        df_macro = df_macro[df_macro['category'] == selected_cat2]
-        macro_title = f"{selected_cat1} ➔ {selected_cat2}"
-    else:
-        macro_title = f"{selected_cat1} (全部)"
-
-    st.subheader(f"📊 單一品類整體價格變動指數：【{macro_title}】")
-
-    if df_macro.empty:
-        st.warning("⚠️ 該類別暫無數據！")
-        st.stop()
-
     daily_avg = df_macro.groupby('date')['price'].mean().reset_index().sort_values('date')
-    latest_date = daily_avg['date'].max()
-    latest_avg_price = daily_avg.iloc[-1]['price']
 
-    def get_cat_past_avg(days):
-        target_date = latest_date - timedelta(days=days)
-        past_df = daily_avg[daily_avg['date'] <= target_date]
-        return past_df.iloc[-1]['price'] if not past_df.empty else None
-
-    avg_dod = ((latest_avg_price - get_cat_past_avg(1)) / get_cat_past_avg(1) * 100) if get_cat_past_avg(1) else None
-    avg_wow = ((latest_avg_price - get_cat_past_avg(7)) / get_cat_past_avg(7) * 100) if get_cat_past_avg(7) else None
-    avg_mom = ((latest_avg_price - get_cat_past_avg(30)) / get_cat_past_avg(30) * 100) if get_cat_past_avg(30) else None
-    avg_yoy = ((latest_avg_price - get_cat_past_avg(365)) / get_cat_past_avg(365) * 100) if get_cat_past_avg(365) else None
-
-    k1, k2, k3, k4 = st.columns(4)
-    with k1:
-        st.metric("📅 品類 DoD (按日變動)", 
-                  f"{avg_dod:+.2f}%" if avg_dod is not None else "N/A",
-                  delta_color="inverse")
-    with k2:
-        st.metric("🗓️ 品類 WoW (按周變動)", 
-                  f"{avg_wow:+.2f}%" if avg_wow is not None else "N/A",
-                  delta_color="inverse")
-    with k3:
-        st.metric("🗓️ 品類 MoM (按月通脹)", 
-                  f"{avg_mom:+.2f}%" if avg_mom is not None else "N/A",
-                  delta_color="inverse")
-    with k4:
-        st.metric("🎆 品類 YoY (按年通脹)", 
-                  f"{avg_yoy:+.2f}%" if avg_yoy is not None else "N/A",
-                  delta_color="inverse")
-
-    st.markdown("---")
-
-    st.subheader("📈 品類平均價格指數走勢圖 (按日/週/月累積)")
-    fig_macro = px.line(
-        daily_avg, x='date', y='price',
-        title=f"{macro_title} 品類平均單價走勢",
-        labels={'date': '日期', 'price': '平均價格 (HKD)'},
-        markers=True
-    )
-    fig_macro.update_traces(line_color='#FF4B4B', line_width=3)
-    fig_macro.update_layout(hovermode="x unified")
+    st.subheader(f"📊 【{selected_cat1}】品類歷史均價走勢圖")
+    fig_macro = px.line(daily_avg, x='date', y='price', title=f"{selected_cat1} 平均價格趨勢", markers=True)
     st.plotly_chart(fig_macro, use_container_width=True)
-
-    st.subheader("🏪 各大超市在該品類的均價走勢比較")
-    shop_daily_avg = df_macro.groupby(['date', 'supermarket'])['price'].mean().reset_index()
-    
-    fig_shop_macro = px.line(
-        shop_daily_avg, x='date', y='price', color='supermarket',
-        title=f"各大超市在【{macro_title}】的平均售價差異與趨勢",
-        labels={'date': '日期', 'price': '超市平均售價 (HKD)', 'supermarket': '超市'},
-        markers=True
-    )
-    fig_shop_macro.update_layout(hovermode="x unified")
-    st.plotly_chart(fig_shop_macro, use_container_width=True)
