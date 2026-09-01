@@ -3,13 +3,36 @@ import os
 import re
 import streamlit as st
 import pandas as pd
+import numpy as np
 import plotly.express as px
 from datetime import datetime, timedelta
 
 # ---------------------------------------------------------
-# 1. 頁面設定
+# 1. 頁面與 UI 基礎設定 (適應手機與桌面端)
 # ---------------------------------------------------------
-st.set_page_config(page_title="香港網上超市價格與優惠追蹤系統", layout="wide")
+st.set_page_config(
+    page_title="香港網上超市價格與優惠追蹤系統",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# 手機端 UI 微調 CSS
+st.markdown("""
+    <style>
+    .stMetric {
+        background-color: #f8f9fa;
+        padding: 10px;
+        border-radius: 8px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+    @media (max-width: 768px) {
+        .block-container {
+            padding-left: 0.5rem;
+            padding-right: 0.5rem;
+        }
+    }
+    </style>
+""", unsafe_allow_html=True)
 
 # ---------------------------------------------------------
 # 🔒 密碼登入機制設定
@@ -55,15 +78,56 @@ st.sidebar.markdown("---")
 st.title("🛒 香港網上超市價格追蹤 & 智能決策系統")
 
 # ---------------------------------------------------------
-# 📊 讀取歷史資料 (自動校正日期與超市名稱)
+# ⚖️ 單位價格標準化解析器 (Extract Unit & Weight)
+# ---------------------------------------------------------
+def parse_unit_price(row):
+    """
+    從商品名稱自動提取重量/容量 (g, kg, ml, l, 包, 支)，並計算標準單價 ($/100g, $/100ml, $/件)
+    """
+    name = str(row['item_name'])
+    price = row['price']
+    
+    if pd.isna(price) or price <= 0:
+        return "N/A"
+        
+    # 匹配重量: 克/kg (g/kg)
+    match_weight = re.search(r'(\d+(?:\.\d+)?)\s*(克|g|kg|千克)', name, re.IGNORECASE)
+    if match_weight:
+        val, unit = float(match_weight.group(1)), match_weight.group(2).lower()
+        if unit in ['kg', '千克']:
+            val *= 1000  # 換算為 g
+        if val > 0:
+            p_100g = (price / val) * 100
+            return f"${p_100g:.2f}/100g"
+
+    # 匹配容量: 毫升/升 (ml/l)
+    match_vol = re.search(r'(\d+(?:\.\d+)?)\s*(毫升|ml|l|升)', name, re.IGNORECASE)
+    if match_vol:
+        val, unit = float(match_vol.group(1)), match_vol.group(2).lower()
+        if unit in ['l', '升']:
+            val *= 1000  # 換算為 ml
+        if val > 0:
+            p_100ml = (price / val) * 100
+            return f"${p_100ml:.2f}/100ml"
+
+    # 匹配數量: 件/包/個/罐/支
+    match_count = re.search(r'(\d+)\s*(包|個|罐|支|件|個裝|包裝|盒)', name)
+    if match_count:
+        val = float(match_count.group(1))
+        if val > 0:
+            p_unit = price / val
+            return f"${p_unit:.2f}/件"
+
+    return "—"
+
+# ---------------------------------------------------------
+# 📊 讀取歷史資料 (Parquet 高效能快取 + 日期/超市標準化)
 # ---------------------------------------------------------
 def fix_inverted_date(date_str):
     if pd.isna(date_str):
         return date_str
     
     s = str(date_str).strip()
-    
-    # 正則匹配 YYYY-MM-DD
     match = re.match(r'^(\d{4})-(\d{2})-(\d{2})', s)
     if match:
         year, month, day = match.groups()
@@ -71,7 +135,6 @@ def fix_inverted_date(date_str):
             return f"2026-08-{month.zfill(2)}"
         return f"{year}-{month}-{day}"
     
-    # 正則匹配 DD/MM/YYYY
     match_slash = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{4})', s)
     if match_slash:
         day, month, year = match_slash.groups()
@@ -81,69 +144,92 @@ def fix_inverted_date(date_str):
         
     return s
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl=3600)
 def load_data():
+    parquet_cache_path = 'data/cache_data.parquet'
     csv_files = glob.glob('data/*.csv')
-    if not csv_files:
-        raise FileNotFoundError("未在 data/ 資料夾中找到任何 CSV 數據檔案！")
-        
-    df_list = []
-    for f in csv_files:
-        try:
-            temp_df = pd.read_csv(f)
-            if not temp_df.empty:
-                df_list.append(temp_df)
-        except pd.errors.EmptyDataError:
-            continue
+    
+    # 檢查 Parquet 快取是否比 CSV 新
+    use_parquet = False
+    if os.path.exists(parquet_cache_path) and csv_files:
+        parquet_mtime = os.path.getmtime(parquet_cache_path)
+        latest_csv_mtime = max([os.path.getmtime(f) for f in csv_files])
+        if parquet_mtime > latest_csv_mtime:
+            use_parquet = True
 
-    if not df_list:
-        raise FileNotFoundError("data/ 資料夾內的 CSV 檔案皆無有效數據！")
+    if use_parquet:
+        df = pd.read_parquet(parquet_cache_path)
+    else:
+        if not csv_files:
+            raise FileNotFoundError("未在 data/ 資料夾中找到任何 CSV 數據檔案！")
+            
+        df_list = []
+        for f in csv_files:
+            try:
+                temp_df = pd.read_csv(f)
+                if not temp_df.empty:
+                    df_list.append(temp_df)
+            except pd.errors.EmptyDataError:
+                continue
+
+        if not df_list:
+            raise FileNotFoundError("data/ 資料夾內的 CSV 檔案皆無有效數據！")
+            
+        df = pd.concat(df_list, ignore_index=True)
         
-    df = pd.concat(df_list, ignore_index=True)
-    
-    # 1. 日期格式校正
-    df['date'] = df['date'].apply(fix_inverted_date)
-    df['date'] = pd.to_datetime(df['date'], errors='coerce')
-    
-    # 2. 🏪 統一超市名稱標準化
-    supermarket_mapping = {
-        'MARKET PLACE / JASONS': 'Market Place / Jasons',
-        'MARKET PLACE BY JASONS': 'Market Place / Jasons',
-        'Market Place / JASONS': 'Market Place / Jasons',
-        'Market Place by Jasons': 'Market Place / Jasons',
-        'Market Place/Jasons': 'Market Place / Jasons'
-    }
-    
-    df['supermarket'] = df['supermarket'].fillna('其他超市').astype(str).str.strip()
-    df['supermarket'] = df['supermarket'].replace(supermarket_mapping)
-    
-    # 欄位補全與清洗
-    if 'cat1' not in df.columns:
-        df['cat1'] = '一般主類別'
-    if 'category' not in df.columns:
-        df['category'] = df['cat1']
-    if 'offers' not in df.columns:
-        df['offers'] = '—'
+        # 1. 日期格式校正
+        df['date'] = df['date'].apply(fix_inverted_date)
+        df['date'] = pd.to_datetime(df['date'], errors='coerce')
         
-    df['cat1'] = df['cat1'].fillna('未分類主類別')
-    df['category'] = df['category'].fillna('未分類子類別')
-    df['brand'] = df['brand'].fillna('其他品牌')
-    df['item_name'] = df['item_name'].fillna('未命名貨品')
-    df['offers'] = df['offers'].fillna('—').astype(str).str.strip().replace({'': '—', 'nan': '—', 'None': '—'})
-    df['price'] = pd.to_numeric(df['price'], errors='coerce')
-    
-    return df.dropna(subset=['price', 'date'])
+        # 2. 🏪 統一超市名稱標準化
+        supermarket_mapping = {
+            'MARKET PLACE / JASONS': 'Market Place / Jasons',
+            'MARKET PLACE BY JASONS': 'Market Place / Jasons',
+            'Market Place / JASONS': 'Market Place / Jasons',
+            'Market Place by Jasons': 'Market Place / Jasons',
+            'Market Place/Jasons': 'Market Place / Jasons'
+        }
+        
+        df['supermarket'] = df['supermarket'].fillna('其他超市').astype(str).str.strip()
+        df['supermarket'] = df['supermarket'].replace(supermarket_mapping)
+        
+        # 欄位補全與清洗
+        if 'cat1' not in df.columns:
+            df['cat1'] = '一般主類別'
+        if 'category' not in df.columns:
+            df['category'] = df['cat1']
+        if 'offers' not in df.columns:
+            df['offers'] = '—'
+            
+        df['cat1'] = df['cat1'].fillna('未分類主類別')
+        df['category'] = df['category'].fillna('未分類子類別')
+        df['brand'] = df['brand'].fillna('其他品牌')
+        df['item_name'] = df['item_name'].fillna('未命名貨品')
+        df['offers'] = df['offers'].fillna('—').astype(str).str.strip().replace({'': '—', 'nan': '—', 'None': '—'})
+        df['price'] = pd.to_numeric(df['price'], errors='coerce')
+        df = df.dropna(subset=['price', 'date'])
+        
+        # 自動計算單位標準價
+        df['unit_price_str'] = df.apply(parse_unit_price, axis=1)
+
+        # 自動存為 Parquet 以備下一次高速讀取
+        try:
+            df.to_parquet(parquet_cache_path, index=False)
+        except Exception:
+            pass
+            
+    return df
 
 try:
     df = load_data()
     system_latest_date = df['date'].max().strftime('%Y-%m-%d')
-    st.caption(f"🌐 數據庫最新累積更新日期：**{system_latest_date}**")
+    st.caption(f"🌐 數據庫最新累積更新日期：**{system_latest_date}** (已啟用 Parquet 引擎)")
 except Exception as e:
     st.error(f"未搵到歷史數據或格式有誤，請檢查 data/ 資料夾！錯誤訊息: {e}")
     st.stop()
 
 # ---------------------------------------------------------
-# 定義選單名稱常量 (確保選項與 if/elif 完全一致)
+# 定義選單名稱常量
 # ---------------------------------------------------------
 MENU_DEAL_FINDER = "🔥 著數與降價掃瞄器 (Deal Finder)"
 MENU_BASKET_CALC = "🛒 購物籃總價比價神器 (Basket Calculator)"
@@ -201,8 +287,8 @@ if page == MENU_DEAL_FINDER:
         if drop_df.empty:
             st.info("今日暫未偵測到相較昨日降價的商品。")
         else:
-            show_drop = drop_df[['item_name', 'brand', 'supermarket', 'price', 'yesterday_price', 'price_drop', 'drop_pct', 'offers']].copy()
-            show_drop.columns = ['貨品名稱', '品牌', '超市', '今日價格 (HKD)', '昨日價格 (HKD)', '降價金額', '降幅 (%)', '特別優惠']
+            show_drop = drop_df[['item_name', 'brand', 'supermarket', 'price', 'unit_price_str', 'yesterday_price', 'price_drop', 'drop_pct', 'offers']].copy()
+            show_drop.columns = ['貨品名稱', '品牌', '超市', '今日價格 (HKD)', '標準單價', '昨日價格 (HKD)', '降價金額', '降幅 (%)', '特別優惠']
             st.dataframe(
                 show_drop,
                 column_config={
@@ -221,8 +307,8 @@ if page == MENU_DEAL_FINDER:
         if atl_df.empty:
             st.info("今日暫無商品觸及歷史最低價。")
         else:
-            show_atl = atl_df[['item_name', 'brand', 'supermarket', 'price', 'historical_min_price', 'offers']].copy()
-            show_atl.columns = ['貨品名稱', '品牌', '超市', '當前價格 (HKD)', '歷史最低價紀錄', '特別優惠']
+            show_atl = atl_df[['item_name', 'brand', 'supermarket', 'price', 'unit_price_str', 'historical_min_price', 'offers']].copy()
+            show_atl.columns = ['貨品名稱', '品牌', '超市', '當前價格 (HKD)', '標準單價', '歷史最低價紀錄', '特別優惠']
             st.dataframe(
                 show_atl,
                 column_config={
@@ -241,8 +327,8 @@ if page == MENU_DEAL_FINDER:
         if offer_df.empty:
             st.warning(f"未找到包含「{kw}」優惠的商品。")
         else:
-            show_offer = offer_df[['item_name', 'brand', 'supermarket', 'price', 'offers']].copy()
-            show_offer.columns = ['貨品名稱', '品牌', '超市', '價格 (HKD)', '特別優惠說明']
+            show_offer = offer_df[['item_name', 'brand', 'supermarket', 'price', 'unit_price_str', 'offers']].copy()
+            show_offer.columns = ['貨品名稱', '品牌', '超市', '價格 (HKD)', '標準單價', '特別優惠說明']
             st.dataframe(show_offer, use_container_width=True, hide_index=True)
 
 
@@ -270,7 +356,6 @@ elif page == MENU_BASKET_CALC:
         st.warning("請先在上方選擇至少一件貨品加入購物籃！")
     else:
         basket_df = latest_df[latest_df['item_name'].isin(selected_basket_items)]
-
         pivot_basket = basket_df.pivot_table(index='item_name', columns='supermarket', values='price', aggfunc='min')
 
         st.markdown("### 📋 購物籃貨品單價對比表")
@@ -349,7 +434,7 @@ elif page == MENU_CAT_OVERVIEW:
     overview_df = pd.DataFrame(overview_list).dropna(subset=[pct_col_name])
 
     if overview_df.empty:
-        st.warning(f"⚠️ 歷史數據不足以計算 {time_frame} 變動（目標對比日期：{target_date.strftime('%Y-%m-%d')}）！")
+        st.warning(f"⚠️ 歷史數據不足以計算 {time_frame} 變動！")
     else:
         top_gainer = overview_df.sort_values(by=pct_col_name, ascending=False).iloc[0]
         top_loser = overview_df.sort_values(by=pct_col_name, ascending=True).iloc[0]
@@ -386,13 +471,12 @@ elif page == MENU_CAT_OVERVIEW:
 
 
 # ==========================================
-# 🔍 頁面 4：單一貨品深度追蹤
+# 🔍 頁面 4：單一貨品深度追蹤 (含買入/觀望智慧訊號)
 # ==========================================
 elif page == MENU_SINGLE_ITEM:
     st.sidebar.header("🔍 篩選條件")
     
     search_keyword = st.sidebar.text_input("🔍 關鍵字快速搜尋貨品名稱", "")
-
     categories = sorted(df['category'].dropna().unique().tolist())
     selected_cat = st.sidebar.selectbox("1. 選擇貨品類別", options=["全部類別"] + categories)
 
@@ -414,10 +498,23 @@ elif page == MENU_SINGLE_ITEM:
     items = sorted(df_filtered['item_name'].dropna().unique().tolist())
 
     if not items:
-        st.warning("⚠️ 找不到符合篩選條件的貨品！請嘗試放寬側邊欄的搜尋或選擇條件。")
+        st.warning("⚠️ 找不到符合篩選條件的貨品！請嘗試放寬側邊欄的選擇條件。")
     else:
         selected_item = st.sidebar.selectbox("3. 選擇貨品", options=items)
         item_df = df_filtered[df_filtered['item_name'] == selected_item]
+
+        # 🔮 計算買入/觀望智慧訊號 (Buy / Wait Signal)
+        def get_buy_signal(price, history_prices):
+            if len(history_prices) < 3:
+                return "⚪ 數據收集期間"
+            q25 = np.percentile(history_prices, 25)
+            q75 = np.percentile(history_prices, 75)
+            if price <= q25:
+                return "🟢 建議入手 (超值)"
+            elif price >= q75:
+                return "🔴 偏貴觀望"
+            else:
+                return "🟡 價格平穩"
 
         def calculate_metrics(data):
             if data.empty:
@@ -431,7 +528,12 @@ elif page == MENU_SINGLE_ITEM:
                 latest_row = shop_data.iloc[-1]
                 curr_price = latest_row['price']
                 curr_offer = latest_row.get('offers', '—')
+                unit_p = latest_row.get('unit_price_str', '—')
                 
+                # 計算智慧訊號
+                history_p = shop_data['price'].tolist()
+                signal = get_buy_signal(curr_price, history_p)
+
                 def get_past_price(days):
                     target_date = latest_date - timedelta(days=days)
                     past_data = shop_data[shop_data['date'] <= target_date]
@@ -440,22 +542,22 @@ elif page == MENU_SINGLE_ITEM:
                 dod = ((curr_price - get_past_price(1)) / get_past_price(1) * 100) if get_past_price(1) else None
                 wow = ((curr_price - get_past_price(7)) / get_past_price(7) * 100) if get_past_price(7) else None
                 mom = ((curr_price - get_past_price(30)) / get_past_price(30) * 100) if get_past_price(30) else None
-                yoy = ((curr_price - get_past_price(365)) / get_past_price(365) * 100) if get_past_price(365) else None
                 
                 metrics.append({
                     '超市': shop,
                     '最新售價 ($)': f"${curr_price:.2f}",
+                    '標準單價': unit_p,
+                    '買入建議': signal,
                     '特別優惠': curr_offer,
                     'DoD (按日)': f"{dod:+.2f}%" if dod is not None else "N/A",
                     'WoW (按周)': f"{wow:+.2f}%" if wow is not None else "N/A",
-                    'MoM (按月)': f"{mom:+.2f}%" if mom is not None else "N/A",
-                    'YoY (按年)': f"{yoy:+.2f}%" if yoy is not None else "N/A"
+                    'MoM (按月)': f"{mom:+.2f}%" if mom is not None else "N/A"
                 })
             return pd.DataFrame(metrics)
 
         if not item_df.empty:
             item_latest_date_str = item_df['date'].max().strftime('%Y-%m-%d')
-            st.subheader(f"📌 {selected_item} - 現價、優惠及歷史變動 (截至 {item_latest_date_str})")
+            st.subheader(f"📌 {selected_item} - 現價、標準單價與智慧買入訊號")
 
             metrics_df = calculate_metrics(item_df)
             if not metrics_df.empty:
@@ -488,12 +590,12 @@ elif page == MENU_CAT_COMPARE:
 
     df_cat = df_cat1 if selected_category == "全部子類別" else df_cat1[df_cat1['category'] == selected_category]
 
-    st.subheader(f"📋 同類別貨品現時價格排行榜")
+    st.subheader(f"📋 同類別貨品現時價格與標準單價排行榜")
     latest_date = df_cat['date'].max()
     latest_cat_df = df_cat[df_cat['date'] == latest_date]
 
-    summary_table = latest_cat_df[['item_name', 'brand', 'supermarket', 'price', 'offers']].copy().sort_values(by='price', ascending=True)
-    summary_table.columns = ['貨品名稱', '品牌', '超市', '最新價格 (HKD)', '特別優惠']
+    summary_table = latest_cat_df[['item_name', 'brand', 'supermarket', 'price', 'unit_price_str', 'offers']].copy().sort_values(by='price', ascending=True)
+    summary_table.columns = ['貨品名稱', '品牌', '超市', '最新價格 (HKD)', '標準單價 ($/100g, $/件)', '特別優惠']
     
     st.dataframe(summary_table, use_container_width=True, hide_index=True)
     st.download_button("📥 下載類別格價清單 (CSV)", summary_table.to_csv(index=False).encode('utf-8-sig'), "category_price_rank.csv", "text/csv")
