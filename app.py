@@ -78,11 +78,11 @@ st.sidebar.markdown("---")
 st.title("🛒 香港網上超市價格追蹤 & 智能決策系統")
 
 # ---------------------------------------------------------
-# ⚖️ 單位價格標準化解析器 (Extract Unit & Weight)
+# 秤 單位價格標準化解析器 (Extract Unit & Weight) - 強化中文單位匹配
 # ---------------------------------------------------------
 def parse_unit_price(row):
     """
-    從商品名稱自動提取重量/容量 (g, kg, ml, l, 包, 支)，並計算標準單價 ($/100g, $/100ml, $/件)
+    從商品名稱自動提取重量/容量 (g, kg, ml, l, 包, 支, 公斤)，並計算標準單價 ($/100g, $/100ml, $/件)
     """
     name = str(row['item_name'])
     price = row['price']
@@ -90,17 +90,17 @@ def parse_unit_price(row):
     if pd.isna(price) or price <= 0:
         return "N/A"
         
-    # 匹配重量: 克/kg (g/kg)
-    match_weight = re.search(r'(\d+(?:\.\d+)?)\s*(克|g|kg|千克)', name, re.IGNORECASE)
+    # 1. 匹配重量: 克/g/kg/千克/公斤
+    match_weight = re.search(r'(\d+(?:\.\d+)?)\s*(千克|公斤|kg|克|g)', name, re.IGNORECASE)
     if match_weight:
         val, unit = float(match_weight.group(1)), match_weight.group(2).lower()
-        if unit in ['kg', '千克']:
+        if unit in ['kg', '千克', '公斤']:
             val *= 1000  # 換算為 g
         if val > 0:
             p_100g = (price / val) * 100
             return f"${p_100g:.2f}/100g"
 
-    # 匹配容量: 毫升/升 (ml/l)
+    # 2. 匹配容量: 毫升/升/ml/l
     match_vol = re.search(r'(\d+(?:\.\d+)?)\s*(毫升|ml|l|升)', name, re.IGNORECASE)
     if match_vol:
         val, unit = float(match_vol.group(1)), match_vol.group(2).lower()
@@ -110,7 +110,7 @@ def parse_unit_price(row):
             p_100ml = (price / val) * 100
             return f"${p_100ml:.2f}/100ml"
 
-    # 匹配數量: 件/包/個/罐/支
+    # 3. 匹配數量: 件/包/個/罐/支
     match_count = re.search(r'(\d+)\s*(包|個|罐|支|件|個裝|包裝|盒)', name)
     if match_count:
         val = float(match_count.group(1))
@@ -149,7 +149,6 @@ def load_data():
     parquet_cache_path = 'data/cache_data.parquet'
     csv_files = glob.glob('data/*.csv')
     
-    # 檢查 Parquet 快取是否比 CSV 新
     use_parquet = False
     if os.path.exists(parquet_cache_path) and csv_files:
         parquet_mtime = os.path.getmtime(parquet_cache_path)
@@ -212,7 +211,6 @@ def load_data():
         # 自動計算單位標準價
         df['unit_price_str'] = df.apply(parse_unit_price, axis=1)
 
-        # 自動存為 Parquet 以備下一次高速讀取
         try:
             df.to_parquet(parquet_cache_path, index=False)
         except Exception:
@@ -238,7 +236,6 @@ MENU_SINGLE_ITEM = "🔍 單一貨品深度追蹤"
 MENU_CAT_COMPARE = "📊 同類別貨品價格比較 (Cat1 / Category)"
 MENU_MACRO_INSIGHTS = "📈 單一品類價格變動與通脹分析 (Macro Insights)"
 
-# 側邊欄：分頁選單
 page = st.sidebar.radio("📌 請選擇分析功能", [
     MENU_DEAL_FINDER,
     MENU_BASKET_CALC,
@@ -251,7 +248,7 @@ st.sidebar.markdown("---")
 
 
 # ==========================================
-# ⚡ 頁面 1：🔥 著數與降價掃瞄器 (Deal Finder)
+# 🔥 頁面 1：著數與降價掃瞄器
 # ==========================================
 if page == MENU_DEAL_FINDER:
     st.subheader("🔥 今日跨超市著數與降價掃瞄器")
@@ -263,7 +260,6 @@ if page == MENU_DEAL_FINDER:
     latest_df = df[df['date'] == latest_date].copy()
     past_df = df[df['date'] < latest_date].copy()
 
-    # 計算歷史最低價
     if not past_df.empty:
         min_prices = past_df.groupby(['item_name', 'supermarket'])['price'].min().reset_index()
         min_prices.rename(columns={'price': 'historical_min_price'}, inplace=True)
@@ -271,14 +267,12 @@ if page == MENU_DEAL_FINDER:
     else:
         latest_df['historical_min_price'] = None
 
-    # 計算相比昨天的降價金額與幅度
     yesterday_df = df[df['date'] == yesterday][['item_name', 'supermarket', 'price']].rename(columns={'price': 'yesterday_price'})
     latest_df = pd.merge(latest_df, yesterday_df, on=['item_name', 'supermarket'], how='left')
     
     latest_df['price_drop'] = latest_df['yesterday_price'] - latest_df['price']
     latest_df['drop_pct'] = (latest_df['price_drop'] / latest_df['yesterday_price']) * 100
 
-    # 頁籤分類
     tab1, tab2, tab3 = st.tabs(["📉 今日降價 Top 20", "🏆 創歷史新低價商品", "🏷️ 精選特別優惠 / 買一送一"])
 
     with tab1:
@@ -333,7 +327,7 @@ if page == MENU_DEAL_FINDER:
 
 
 # ==========================================
-# 🛒 頁面 2：🛒 購物籃總價比價神器 (Basket Calculator)
+# 🛒 頁面 2：購物籃總價比價神器
 # ==========================================
 elif page == MENU_BASKET_CALC:
     st.subheader("🛒 跨超市購物籃組合格價神器")
@@ -387,7 +381,7 @@ elif page == MENU_BASKET_CALC:
 
 
 # ==========================================
-# 🌐 頁面 3：全庫品類通脹與指數大盤 (Category Overview)
+# 🌐 頁面 3：全庫品類通脹與指數大盤
 # ==========================================
 elif page == MENU_CAT_OVERVIEW:
     st.subheader("🌐 全庫品類整體價格改變與 CPI 物價指數大盤")
@@ -471,7 +465,7 @@ elif page == MENU_CAT_OVERVIEW:
 
 
 # ==========================================
-# 🔍 頁面 4：單一貨品深度追蹤 (含買入/觀望智慧訊號)
+# 🔍 頁面 4：單一貨品深度追蹤 (全新雙重維度判定買入訊號)
 # ==========================================
 elif page == MENU_SINGLE_ITEM:
     st.sidebar.header("🔍 篩選條件")
@@ -503,23 +497,27 @@ elif page == MENU_SINGLE_ITEM:
         selected_item = st.sidebar.selectbox("3. 選擇貨品", options=items)
         item_df = df_filtered[df_filtered['item_name'] == selected_item]
 
-        # 🔮 計算買入/觀望智慧訊號 (Buy / Wait Signal)
-        def get_buy_signal(price, history_prices):
-            if len(history_prices) < 3:
-                return "⚪ 數據收集期間"
-            q25 = np.percentile(history_prices, 25)
-            q75 = np.percentile(history_prices, 75)
-            if price <= q25:
-                return "🟢 建議入手 (超值)"
-            elif price >= q75:
-                return "🔴 偏貴觀望"
-            else:
-                return "🟡 價格平穩"
-
-        def calculate_metrics(data):
+        # ---------------------------------------------------------
+        # 💡 雙重維度邏輯：結合「全網橫向比價」與「自身縱向歷史」
+        # ---------------------------------------------------------
+        def calculate_metrics_v2(data):
             if data.empty:
                 return pd.DataFrame()
             latest_date = data['date'].max()
+            
+            # 先取得所有超市在「今日」的最新價格
+            latest_rows = []
+            for shop in data['supermarket'].unique():
+                shop_data = data[data['supermarket'] == shop].sort_values('date')
+                if not shop_data.empty:
+                    latest_rows.append(shop_data.iloc[-1])
+            
+            if not latest_rows:
+                return pd.DataFrame()
+                
+            latest_all_shops = pd.DataFrame(latest_rows)
+            min_current_market_price = latest_all_shops['price'].min() # 今日全網最低價
+            
             metrics = []
             for shop in data['supermarket'].unique():
                 shop_data = data[data['supermarket'] == shop].sort_values('date')
@@ -528,11 +526,21 @@ elif page == MENU_SINGLE_ITEM:
                 latest_row = shop_data.iloc[-1]
                 curr_price = latest_row['price']
                 curr_offer = latest_row.get('offers', '—')
-                unit_p = latest_row.get('unit_price_str', '—')
-                
-                # 計算智慧訊號
+                unit_p = parse_unit_price(latest_row)  # 動態重算標準單價
+
+                # 判定邏輯：
+                # 1. 如果你的價格比今日別家貴 -> 🔴 偏貴 (其他超市更平)
+                # 2. 如果你的價格跟別家同價，但這不是歷史低位 -> 🟡 價格平穩
+                # 3. 如果你的價格是今日最低，且同時處於該超市的歷史低位 (≤ Q25) -> 🟢 建議入手 (歷史低位)
                 history_p = shop_data['price'].tolist()
-                signal = get_buy_signal(curr_price, history_p)
+                q25 = np.percentile(history_p, 25) if len(history_p) >= 3 else min(history_p)
+                
+                if curr_price > min_current_market_price:
+                    signal = "🔴 偏貴 (其他超市更平)"
+                elif curr_price <= min_current_market_price and curr_price <= q25:
+                    signal = "🟢 建議入手 (歷史低位)"
+                else:
+                    signal = "🟡 價格平穩"
 
                 def get_past_price(days):
                     target_date = latest_date - timedelta(days=days)
@@ -556,10 +564,9 @@ elif page == MENU_SINGLE_ITEM:
             return pd.DataFrame(metrics)
 
         if not item_df.empty:
-            item_latest_date_str = item_df['date'].max().strftime('%Y-%m-%d')
             st.subheader(f"📌 {selected_item} - 現價、標準單價與智慧買入訊號")
 
-            metrics_df = calculate_metrics(item_df)
+            metrics_df = calculate_metrics_v2(item_df)
             if not metrics_df.empty:
                 st.dataframe(metrics_df, use_container_width=True, hide_index=True)
             else:
@@ -577,7 +584,7 @@ elif page == MENU_SINGLE_ITEM:
 
 
 # ==========================================
-# 📊 頁面 5：同類別貨品價格比較 (Cat1 / Category)
+# 📊 頁面 5：同類別貨品價格比較
 # ==========================================
 elif page == MENU_CAT_COMPARE:
     st.sidebar.header("📊 類別比較條件")
@@ -592,7 +599,8 @@ elif page == MENU_CAT_COMPARE:
 
     st.subheader(f"📋 同類別貨品現時價格與標準單價排行榜")
     latest_date = df_cat['date'].max()
-    latest_cat_df = df_cat[df_cat['date'] == latest_date]
+    latest_cat_df = df_cat[df_cat['date'] == latest_date].copy()
+    latest_cat_df['unit_price_str'] = latest_cat_df.apply(parse_unit_price, axis=1)
 
     summary_table = latest_cat_df[['item_name', 'brand', 'supermarket', 'price', 'unit_price_str', 'offers']].copy().sort_values(by='price', ascending=True)
     summary_table.columns = ['貨品名稱', '品牌', '超市', '最新價格 (HKD)', '標準單價 ($/100g, $/件)', '特別優惠']
@@ -602,7 +610,7 @@ elif page == MENU_CAT_COMPARE:
 
 
 # ==========================================
-# 📈 頁面 6：單一品類價格變動與通脹分析 (Macro Insights)
+# 📈 頁面 6：單一品類價格變動與通脹分析
 # ==========================================
 elif page == MENU_MACRO_INSIGHTS:
     st.sidebar.header("📉 品類宏觀分析條件")
