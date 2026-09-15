@@ -37,7 +37,7 @@ st.markdown("""
 # ---------------------------------------------------------
 # 🔒 密碼登入機制設定
 # ---------------------------------------------------------
-APP_PASSWORD = "zakuissmart_168"
+APP_PASSWORD = "168"
 
 if "authenticated" not in st.session_state:
     st.session_state.authenticated = False
